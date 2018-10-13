@@ -15,6 +15,7 @@
  */
 package org.onosproject.net.flowobjective.impl;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -79,12 +80,12 @@ import static org.onosproject.security.AppPermission.Type.FLOWRULE_WRITE;
 /**
  * Provides implementation of the flow objective programming service.
  */
-@Component(immediate = true)
+@Component(enabled = false)
 @Service
 public class FlowObjectiveManager implements FlowObjectiveService {
 
-    public static final int INSTALL_RETRY_ATTEMPTS = 5;
-    public static final long INSTALL_RETRY_INTERVAL = 1000; // ms
+    private static final int INSTALL_RETRY_ATTEMPTS = 5;
+    private static final long INSTALL_RETRY_INTERVAL = 1000; // ms
 
     private static final String WORKER_PATTERN = "objective-installer-%d";
     private static final String GROUP_THREAD_NAME = "onos/objective-installer";
@@ -110,9 +111,11 @@ public class FlowObjectiveManager implements FlowObjectiveService {
     // Note: The following dependencies are added on behalf of the pipeline
     // driver behaviours to assure these services are available for their
     // initialization.
+    @SuppressWarnings("unused")
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected FlowRuleService flowRuleService;
 
+    @SuppressWarnings("unused")
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected GroupService groupService;
 
@@ -122,31 +125,30 @@ public class FlowObjectiveManager implements FlowObjectiveService {
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected ComponentConfigService cfgService;
 
-    private final FlowObjectiveStoreDelegate delegate = new InternalStoreDelegate();
+    final FlowObjectiveStoreDelegate delegate = new InternalStoreDelegate();
 
     private final Map<DeviceId, DriverHandler> driverHandlers = Maps.newConcurrentMap();
-    private final Map<DeviceId, Pipeliner> pipeliners = Maps.newConcurrentMap();
+    protected final Map<DeviceId, Pipeliner> pipeliners = Maps.newConcurrentMap();
 
     private final PipelinerContext context = new InnerPipelineContext();
     private final DeviceListener deviceListener = new InnerDeviceListener();
     private final DriverListener driverListener = new InnerDriverListener();
 
-    protected ServiceDirectory serviceDirectory = new DefaultServiceDirectory();
+    private ServiceDirectory serviceDirectory = new DefaultServiceDirectory();
 
     // local stores for queuing fwd and next objectives that are waiting for an
     // associated next objective execution to complete. The signal for completed
     // execution comes from a pipeline driver, in this or another controller
     // instance, via the DistributedFlowObjectiveStore.
-    private final Map<Integer, Set<PendingFlowObjective>> pendingForwards =
-            Maps.newConcurrentMap();
-    private final Map<Integer, List<PendingFlowObjective>> pendingNexts =
-            Maps.newConcurrentMap();
+    // TODO Making these cache and timeout the entries
+    final Map<Integer, Set<PendingFlowObjective>> pendingForwards = Maps.newConcurrentMap();
+    final Map<Integer, List<PendingFlowObjective>> pendingNexts = Maps.newConcurrentMap();
 
     // local store to track which nextObjectives were sent to which device
     // for debugging purposes
     private Map<Integer, DeviceId> nextToDevice = Maps.newConcurrentMap();
 
-    private ExecutorService executorService;
+    ExecutorService executorService;
 
     @Activate
     protected void activate() {
@@ -195,17 +197,17 @@ public class FlowObjectiveManager implements FlowObjectiveService {
      * make a few attempts to find the appropriate driver, then eventually give
      * up and report an error if no suitable driver could be found.
      */
-    private class ObjectiveInstaller implements Runnable {
-        private final DeviceId deviceId;
-        private final Objective objective;
+    class ObjectiveInstaller implements Runnable {
+        final DeviceId deviceId;
+        final Objective objective;
 
         private final int numAttempts;
 
-        public ObjectiveInstaller(DeviceId deviceId, Objective objective) {
+        ObjectiveInstaller(DeviceId deviceId, Objective objective) {
             this(deviceId, objective, 1);
         }
 
-        public ObjectiveInstaller(DeviceId deviceId, Objective objective, int attemps) {
+        ObjectiveInstaller(DeviceId deviceId, Objective objective, int attemps) {
             this.deviceId = checkNotNull(deviceId);
             this.objective = checkNotNull(objective);
             this.numAttempts = attemps;
@@ -252,7 +254,6 @@ public class FlowObjectiveManager implements FlowObjectiveService {
     public void forward(DeviceId deviceId, ForwardingObjective forwardingObjective) {
         checkPermission(FLOWRULE_WRITE);
         if (forwardingObjective.nextId() == null ||
-                forwardingObjective.op() == Objective.Operation.REMOVE ||
                 flowObjectiveStore.getNextGroup(forwardingObjective.nextId()) != null ||
                 !queueFwdObjective(deviceId, forwardingObjective)) {
             // fast path
@@ -264,6 +265,7 @@ public class FlowObjectiveManager implements FlowObjectiveService {
     public void next(DeviceId deviceId, NextObjective nextObjective) {
         checkPermission(FLOWRULE_WRITE);
         if (nextObjective.op() == Operation.ADD ||
+                nextObjective.op() == Operation.VERIFY ||
                 flowObjectiveStore.getNextGroup(nextObjective.id()) != null ||
                 !queueNextObjective(deviceId, nextObjective)) {
             // either group exists or we are trying to create it - let it through
@@ -281,7 +283,7 @@ public class FlowObjectiveManager implements FlowObjectiveService {
     public void initPolicy(String policy) {
     }
 
-    private boolean queueFwdObjective(DeviceId deviceId, ForwardingObjective fwd) {
+    boolean queueFwdObjective(DeviceId deviceId, ForwardingObjective fwd) {
         boolean queued = false;
         synchronized (pendingForwards) {
             // double check the flow objective store, because this block could run
@@ -290,7 +292,7 @@ public class FlowObjectiveManager implements FlowObjectiveService {
                 pendingForwards.compute(fwd.nextId(), (id, pending) -> {
                     PendingFlowObjective pendfo = new PendingFlowObjective(deviceId, fwd);
                     if (pending == null) {
-                        return Sets.newHashSet(pendfo);
+                        return Sets.newLinkedHashSet(ImmutableSet.of(pendfo));
                     } else {
                         pending.add(pendfo);
                         return pending;
@@ -306,8 +308,7 @@ public class FlowObjectiveManager implements FlowObjectiveService {
         return queued;
     }
 
-    private boolean queueNextObjective(DeviceId deviceId, NextObjective next) {
-
+    boolean queueNextObjective(DeviceId deviceId, NextObjective next) {
         // we need to hold off on other operations till we get notified that the
         // initial group creation has succeeded
         boolean queued = false;
@@ -578,11 +579,11 @@ public class FlowObjectiveManager implements FlowObjectiveService {
      * removeFromExisting) waiting for a next objective with the same id to
      * complete execution.
      */
-    private class PendingFlowObjective {
+    protected class PendingFlowObjective {
         private final DeviceId deviceId;
         private final Objective flowObj;
 
-        public PendingFlowObjective(DeviceId deviceId, Objective flowObj) {
+        PendingFlowObjective(DeviceId deviceId, Objective flowObj) {
             this.deviceId = deviceId;
             this.flowObj = flowObj;
         }
@@ -609,11 +610,9 @@ public class FlowObjectiveManager implements FlowObjectiveService {
                 return false;
             }
             final PendingFlowObjective other = (PendingFlowObjective) obj;
-            if (this.deviceId.equals(other.deviceId) &&
-                    this.flowObj.equals(other.flowObj)) {
-                return true;
-            }
-            return false;
+
+            return this.deviceId.equals(other.deviceId) &&
+                    this.flowObj.equals(other.flowObj);
         }
     }
 
@@ -685,10 +684,5 @@ public class FlowObjectiveManager implements FlowObjectiveService {
         }
 
         return pendingFlowObjectives;
-    }
-
-    @Override
-    public List<String> getPendingNexts() {
-        return getPendingFlowObjectives();
     }
 }

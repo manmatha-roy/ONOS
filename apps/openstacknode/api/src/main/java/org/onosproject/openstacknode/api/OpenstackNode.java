@@ -17,10 +17,12 @@ package org.onosproject.openstacknode.api;
 
 import org.onlab.packet.IpAddress;
 import org.onlab.packet.MacAddress;
-import org.onosproject.core.GroupId;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.PortNumber;
-import org.onosproject.net.group.GroupKey;
+import org.onosproject.net.behaviour.ControllerInfo;
+import org.onosproject.openstacknode.api.DpdkConfig.DatapathType;
+
+import java.util.Collection;
 
 /**
  * Representation of a node used in OpenstackNetworking service.
@@ -28,11 +30,13 @@ import org.onosproject.net.group.GroupKey;
 public interface OpenstackNode {
 
     /**
-     * List of valid virtual network modes.
+     * List of valid network modes.
+     * This includes both physical and virtual network types.
      */
     enum NetworkMode {
         VXLAN,
-        VLAN
+        VLAN,
+        FLAT
     }
 
     /**
@@ -40,7 +44,8 @@ public interface OpenstackNode {
      */
     enum NodeType {
         COMPUTE,
-        GATEWAY
+        GATEWAY,
+        CONTROLLER
     }
 
     /**
@@ -100,22 +105,6 @@ public interface OpenstackNode {
     NodeState state();
 
     /**
-     * Returns the gateway group ID of this node.
-     *
-     * @param mode network mode of the group
-     * @return gateway group identifier
-     */
-    GroupId gatewayGroupId(NetworkMode mode);
-
-    /**
-     * Returns the group key of this node.
-     *
-     * @param mode network mode of the group
-     * @return gateway group key
-     */
-    GroupKey gatewayGroupKey(NetworkMode mode);
-
-    /**
      * Returns the tunnel port number.
      *
      * @return port number; null if tunnel port does not exist
@@ -123,7 +112,7 @@ public interface OpenstackNode {
     PortNumber tunnelPortNum();
 
     /**
-     * Returns the vlan port nubmer.
+     * Returns the vlan port number.
      *
      * @return port number; null if vlan port does not exist
      */
@@ -151,6 +140,20 @@ public interface OpenstackNode {
     String uplinkPort();
 
     /**
+     * Returns the data path type.
+     *
+     * @return data path type; normal or netdev
+     */
+    DatapathType datapathType();
+
+    /**
+     * Returns socket directory which dpdk port bound to.
+     *
+     * @return socket directory
+     */
+    String socketDir();
+
+    /**
      * Returns the uplink port number.
      *
      * @return uplink port number
@@ -164,6 +167,64 @@ public interface OpenstackNode {
      * @return updated openstack node
      */
     OpenstackNode updateState(NodeState newState);
+
+    /**
+     * Returns new openstack node instance with given integration bridge.
+     *
+     * @param newIntgBridge updated integration bridge
+     * @return updated openstack node
+     */
+    OpenstackNode updateIntbridge(DeviceId newIntgBridge);
+
+    /**
+     * Returns a collection of physical interfaces.
+     *
+     * @return physical interfaces
+     */
+    Collection<OpenstackPhyInterface> phyIntfs();
+
+    /**
+     * Returns the port number of given physical interface.
+     *
+     * @param providerPhysnet provider physical network name
+     * @return port number
+     */
+    PortNumber phyIntfPortNum(String providerPhysnet);
+
+    /**
+     * Returns a collection of customized controllers.
+     *
+     * @return customized controllers
+     */
+    Collection<ControllerInfo> controllers();
+
+    /**
+     * Returns the ssh authentication info.
+     *
+     * @return ssh authentication info
+     */
+    OpenstackSshAuth sshAuthInfo();
+
+    /**
+     * Returns the dpdk config info.
+     *
+     * @return dpdk config
+     */
+    DpdkConfig dpdkConfig();
+
+    /**
+     * Returns the keystone config info.
+     *
+     * @return keystone config
+     */
+    KeystoneConfig keystoneConfig();
+
+    /**
+     * Returns the neutron config info.
+     *
+     * @return neutron config
+     */
+    NeutronConfig neutronConfig();
 
     /**
      * Builder of new node entities.
@@ -240,6 +301,54 @@ public interface OpenstackNode {
          * @return openstack node builder
          */
         Builder state(NodeState state);
+
+        /**
+         * Returns openstack node builder with supplied physical interfaces.
+         *
+         * @param phyIntfs a collection of physical interfaces
+         * @return openstack node builder
+         */
+        Builder phyIntfs(Collection<OpenstackPhyInterface> phyIntfs);
+
+        /**
+         * Returns openstack node builder with supplied customized controllers.
+         *
+         * @param controllers a collection of customized controllers
+         * @return openstack node builder
+         */
+        Builder controllers(Collection<ControllerInfo> controllers);
+
+        /**
+         * Returns openstack node builder with supplied ssh authentication info.
+         *
+         * @param sshAuth ssh authentication info
+         * @return openstack node builder
+         */
+        Builder sshAuthInfo(OpenstackSshAuth sshAuth);
+
+        /**
+         * Returns openstack node builder with supplied dpdk config info.
+         *
+         * @param dpdkConfig dpdk config
+         * @return openstack node builder
+         */
+        Builder dpdkConfig(DpdkConfig dpdkConfig);
+
+        /**
+         * Returns openstack node builder with supplied keystone config info.
+         *
+         * @param keystoneConfig keystone config
+         * @return openstack node builder
+         */
+        Builder keystoneConfig(KeystoneConfig keystoneConfig);
+
+        /**
+         * Returns openstack node builder with supplied neutron config info.
+         *
+         * @param neutronConfig neutron config
+         * @return openstack node builder
+         */
+        Builder neutronConfig(NeutronConfig neutronConfig);
     }
 }
 

@@ -15,6 +15,8 @@
  */
 package org.onlab.util;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Charsets;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
@@ -24,6 +26,7 @@ import org.slf4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -74,6 +77,8 @@ public abstract class Tools {
     private static final Logger log = getLogger(Tools.class);
 
     private static Random random = new SecureRandom();
+
+    private static final String INPUT_JSON_CANNOT_BE_NULL = "Input JSON cannot be null";
 
     /**
      * Returns a thread factory that produces threads named according to the
@@ -215,6 +220,19 @@ public abstract class Tools {
             throw new IllegalArgumentException(message);
         }
         return item;
+    }
+
+    /**
+     * Utility to convert a mapper and an input stream into a JSON tree,
+     * and be tolerant of a null tree being returned.
+     *
+     * @param mapper JSON object mapper
+     * @param stream IO stream containing the JSON
+     * @return object node for the given
+     * @throws IOException if JSON parsing fails
+     */
+    public static ObjectNode readTreeFromStream(ObjectMapper mapper, InputStream stream) throws IOException {
+        return  nullIsIllegal((ObjectNode) mapper.readTree(stream), INPUT_JSON_CANNOT_BE_NULL);
     }
 
     /**
@@ -407,6 +425,26 @@ public abstract class Tools {
         try {
             String s = get(properties, propertyName);
             value = Strings.isNullOrEmpty(s) ? null : Long.valueOf(s);
+        } catch (NumberFormatException | ClassCastException e) {
+            value = null;
+        }
+        return value;
+    }
+
+    /**
+     * Get Float property from the propertyName
+     * Return null if propertyName is not found.
+     *
+     * @param properties   properties to be looked up
+     * @param propertyName the name of the property to look up
+     * @return value when the propertyName is defined or return null
+     */
+    public static Float getFloatProperty(Dictionary<?, ?> properties,
+                                             String propertyName) {
+        Float value;
+        try {
+            String s = get(properties, propertyName);
+            value = Strings.isNullOrEmpty(s) ? null : Float.valueOf(s);
         } catch (NumberFormatException | ClassCastException e) {
             value = null;
         }
@@ -737,6 +775,31 @@ public abstract class Tools {
     }
 
     /**
+     * Returns a new CompletableFuture completed with the first result from a list of futures. If no future
+     * is completed successfully, the returned future will be completed with the first exception.
+     *
+     * @param futures the input futures
+     * @param <T> future result type
+     * @return a new CompletableFuture
+     */
+    public static <T> CompletableFuture<T> firstOf(List<CompletableFuture<T>> futures) {
+        CompletableFuture<T> resultFuture = new CompletableFuture<>();
+        CompletableFuture.allOf(futures.stream()
+            .map(future -> future.thenAccept(r -> resultFuture.complete(r)))
+            .toArray(CompletableFuture[]::new))
+            .whenComplete((r, e) -> {
+                if (!resultFuture.isDone()) {
+                    if (e != null) {
+                        resultFuture.completeExceptionally(e);
+                    } else {
+                        resultFuture.complete(null);
+                    }
+                }
+            });
+        return resultFuture;
+    }
+
+    /**
      * Returns a new CompletableFuture completed by with the first positive result from a list of
      * input CompletableFutures.
      *
@@ -875,5 +938,43 @@ public abstract class Tools {
         checkNotNull(l, "l cannot be null");
         checkNotNull(r, "r cannot be null");
         return l.compareTo(r) >= 0 ? l : r;
+    }
+
+    /**
+     * Log level for the customized logger.
+     */
+    public enum LogLevel {
+        TRACE, DEBUG, INFO, WARN, ERROR
+    }
+
+    /**
+     * Wrapper function that enables logger invocation with log level as a parameter.
+     *
+     * @param logger logger
+     * @param level log level
+     * @param format format string
+     * @param args objects
+     */
+    public static void log(Logger logger, LogLevel level, String format, Object... args) {
+        switch (level) {
+            case TRACE:
+                logger.trace(format, args);
+                break;
+            case DEBUG:
+                logger.debug(format, args);
+                break;
+            case INFO:
+                logger.info(format, args);
+                break;
+            case WARN:
+                logger.warn(format, args);
+                break;
+            case ERROR:
+                logger.error(format, args);
+                break;
+            default:
+                log.error("Unknown log level {}", level);
+                break;
+        }
     }
 }

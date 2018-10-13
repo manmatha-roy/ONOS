@@ -22,7 +22,10 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+
+import com.google.common.collect.ImmutableList;
 import org.onlab.packet.Ethernet;
+import org.onlab.packet.MacAddress;
 import org.onlab.packet.VlanId;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.net.Port;
@@ -36,13 +39,12 @@ import org.onosproject.net.flow.FlowRule;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
 import org.onosproject.net.flow.criteria.Criteria;
-import org.onosproject.net.flow.criteria.Criterion;
 import org.onosproject.net.flow.criteria.EthCriterion;
-import org.onosproject.net.flow.criteria.EthTypeCriterion;
 import org.onosproject.net.flow.criteria.PortCriterion;
 import org.onosproject.net.flow.criteria.VlanIdCriterion;
 import org.onosproject.net.flow.instructions.Instruction;
 import org.onosproject.net.flow.instructions.Instructions.OutputInstruction;
+import org.onosproject.net.flow.instructions.Instructions.NoActionInstruction;
 import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.flowobjective.ObjectiveError;
 import org.onosproject.net.group.Group;
@@ -86,10 +88,11 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
      * @see org.onosproject.driver.pipeline.OFDPA2Pipeline#processEthDstFilter
      */
     @Override
-    protected List<FlowRule> processEthDstFilter(PortCriterion portCriterion,
+    protected List<List<FlowRule>> processEthDstFilter(PortCriterion portCriterion,
                                                  EthCriterion ethCriterion,
                                                  VlanIdCriterion vidCriterion,
                                                  VlanId assignedVlan,
+                                                 MacAddress unicastMac,
                                                  ApplicationId applicationId) {
         // Consider PortNumber.ANY as wildcard. Match ETH_DST only
         if (portCriterion != null && portCriterion.port() == PortNumber.ANY) {
@@ -98,7 +101,7 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
 
         // Multicast MAC
         if (ethCriterion.mask() != null) {
-            return processMcastEthDstFilter(ethCriterion, assignedVlan, applicationId);
+            return processMcastEthDstFilter(ethCriterion, assignedVlan, unicastMac, applicationId);
         }
 
         //handling untagged packets via assigned VLAN
@@ -107,7 +110,7 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
         }
         // ofdpa cannot match on ALL portnumber, so we need to use separate
         // rules for each port.
-        List<PortNumber> portnums = new ArrayList<PortNumber>();
+        List<PortNumber> portnums = new ArrayList<>();
         if (portCriterion != null) {
             if (portCriterion.port() == PortNumber.ALL) {
                 for (Port port : deviceService.getPorts(deviceId)) {
@@ -120,7 +123,7 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
             }
         }
 
-        List<FlowRule> rules = new ArrayList<FlowRule>();
+        List<FlowRule> rules = new ArrayList<>();
         for (PortNumber pnum : portnums) {
             // for unicast IP packets
             TrafficSelector.Builder selector = DefaultTrafficSelector.builder();
@@ -141,7 +144,7 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
                     .forTable(TMAC_TABLE).build();
             rules.add(rule);
         }
-        return rules;
+        return ImmutableList.of(rules);
     }
 
     /*
@@ -153,13 +156,6 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
     protected Collection<FlowRule> processVersatile(ForwardingObjective fwd) {
         log.info("Processing versatile forwarding objective");
 
-        EthTypeCriterion ethType =
-                (EthTypeCriterion) fwd.selector().getCriterion(Criterion.Type.ETH_TYPE);
-        if (ethType == null) {
-            log.error("Versatile forwarding objective must include ethType");
-            fail(fwd, ObjectiveError.BADPARAMS);
-            return Collections.emptySet();
-        }
         if (fwd.nextId() == null && fwd.treatment() == null) {
             log.error("Forwarding objective {} from {} must contain "
                     + "nextId or Treatment", fwd.selector(), fwd.appId());
@@ -192,6 +188,8 @@ public class CpqdOfdpa2VlanPipeline extends CpqdOfdpa2Pipeline {
                         log.warn("Only allowed treatments in versatile forwarding "
                                 + "objectives are punts to the controller");
                     }
+                } else if (ins instanceof NoActionInstruction) {
+                    // No action is allowed and nothing needs to be done
                 } else {
                     log.warn("Cannot process instruction in versatile fwd {}", ins);
                 }

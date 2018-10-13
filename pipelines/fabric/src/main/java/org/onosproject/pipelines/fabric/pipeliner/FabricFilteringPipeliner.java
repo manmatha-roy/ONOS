@@ -16,7 +16,7 @@
 
 package org.onosproject.pipelines.fabric.pipeliner;
 
-import com.google.common.collect.Sets;
+import com.google.common.collect.Lists;
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.MacAddress;
 import org.onlab.packet.VlanId;
@@ -51,17 +51,15 @@ import static org.slf4j.LoggerFactory.getLogger;
 public class FabricFilteringPipeliner {
     private static final Logger log = getLogger(FabricFilteringPipeliner.class);
     // Forwarding types
-    private static final byte FWD_BRIDGING = 0;
-    private static final byte FWD_MPLS = 1;
-    private static final byte FWD_IPV4_UNICAST = 2;
-    private static final byte FWD_IPV4_MULTICAST = 3;
-    private static final byte FWD_IPV6_UNICAST = 4;
-    private static final byte FWD_IPV6_MULTICAST = 5;
+    static final byte FWD_BRIDGING = 0;
+    static final byte FWD_MPLS = 1;
+    static final byte FWD_IPV4_ROUTING = 2;
+    static final byte FWD_IPV6_ROUTING = 3;
     private static final PiCriterion VLAN_VALID = PiCriterion.builder()
-            .matchExact(FabricConstants.HF_VLAN_TAG_IS_VALID_ID, new byte[]{1})
+            .matchExact(FabricConstants.HDR_VLAN_TAG_IS_VALID, new byte[]{1})
             .build();
     private static final PiCriterion VLAN_INVALID = PiCriterion.builder()
-            .matchExact(FabricConstants.HF_VLAN_TAG_IS_VALID_ID, new byte[]{0})
+            .matchExact(FabricConstants.HDR_VLAN_TAG_IS_VALID, new byte[]{0})
             .build();
 
     protected DeviceId deviceId;
@@ -104,11 +102,16 @@ public class FabricFilteringPipeliner {
                 .map(criterion -> (EthCriterion) criterion)
                 .findFirst()
                 .orElse(null);
+        EthCriterion ethDstMaskedCriterion = filterObjective.conditions().stream()
+                .filter(criterion -> criterion.type() == Criterion.Type.ETH_DST_MASKED)
+                .map(criterion -> (EthCriterion) criterion)
+                .findFirst()
+                .orElse(null);
 
         FlowRule inPortVlanTableRule = createInPortVlanTable(inPortCriterion, vlanCriterion,
                                                              filterObjective);
         Collection<FlowRule> fwdClassifierRules = createFwdClassifierRules(inPortCriterion, ethDstCriterion,
-                                                                           filterObjective);
+                                                                           ethDstMaskedCriterion, filterObjective);
 
         resultBuilder.addFlowRule(inPortVlanTableRule);
         fwdClassifierRules.forEach(resultBuilder::addFlowRule);
@@ -147,7 +150,7 @@ public class FabricFilteringPipeliner {
                 .withSelector(selector.build())
                 .withTreatment(treatment)
                 .withPriority(filterObjective.priority())
-                .forTable(FabricConstants.TBL_INGRESS_PORT_VLAN_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FILTERING_INGRESS_PORT_VLAN)
                 .forDevice(deviceId)
                 .makePermanent()
                 .build();
@@ -155,49 +158,57 @@ public class FabricFilteringPipeliner {
 
     private Collection<FlowRule> createFwdClassifierRules(PortCriterion inPortCriterion,
                                                           EthCriterion ethDstCriterion,
+                                                          EthCriterion ethDstMaskedCriterion,
                                                           FilteringObjective filterObjective) {
-        Collection<FlowRule> flowRules = Sets.newHashSet();
-        if (ethDstCriterion == null) {
-            // Bridging table, do nothing
-            return flowRules;
-        }
         PortNumber port = inPortCriterion.port();
-        MacAddress dstMac = ethDstCriterion.mac();
-        if (dstMac.isMulticast()) {
-            flowRules.add(createMulticastFwdClassifierRule(port, dstMac, filterObjective));
+
+        Collection<FlowRule> flowRules = Lists.newArrayList();
+        if (ethDstCriterion == null) {
+            if (ethDstMaskedCriterion == null) {
+                // Bridging table, do nothing
+                return flowRules;
+            }
+            // Masked fwd classifier rule
+            MacAddress dstMac = ethDstMaskedCriterion.mac();
+            MacAddress dstMacMask = ethDstMaskedCriterion.mask();
+            FlowRule flow = createMaskedFwdClassifierRule(port, dstMac, dstMacMask, filterObjective);
+            if (flow != null) {
+                flowRules.add(flow);
+            }
             return flowRules;
         }
-
+        MacAddress dstMac = ethDstCriterion.mac();
         flowRules.addAll(createIpFwdClassifierRules(port, dstMac, filterObjective));
         flowRules.add(createMplsFwdClassifierRule(port, dstMac, filterObjective));
         return flowRules;
     }
 
-    private FlowRule createMulticastFwdClassifierRule(PortNumber inPort, MacAddress dstMac,
-                                                      FilteringObjective filterObjective) {
+    private FlowRule createMaskedFwdClassifierRule(PortNumber inPort, MacAddress dstMac, MacAddress dstMacMask,
+                                                   FilteringObjective filterObjective) {
         TrafficTreatment treatment;
         short ethType;
-        if (dstMac.equals(MacAddress.IPV4_MULTICAST)) {
-            // Ipv4 multicast
-            treatment = createFwdClassifierTreatment(FWD_IPV4_MULTICAST);
+        if (dstMac.equals(MacAddress.IPV4_MULTICAST) && dstMacMask.equals(MacAddress.IPV4_MULTICAST_MASK)) {
+            treatment = createFwdClassifierTreatment(FWD_IPV4_ROUTING);
             ethType = Ethernet.TYPE_IPV4;
-        } else {
-            // IPv6 multicast
-            treatment = createFwdClassifierTreatment(FWD_IPV6_MULTICAST);
+        } else if (dstMac.equals(MacAddress.IPV6_MULTICAST) && dstMacMask.equals(MacAddress.IPV6_MULTICAST_MASK)) {
+            treatment = createFwdClassifierTreatment(FWD_IPV6_ROUTING);
             ethType = Ethernet.TYPE_IPV6;
+        } else {
+            log.warn("Unsupported masked fwd classifier rule. mac={}. mask={}", dstMac, dstMacMask);
+            return null;
         }
-        return createFwdClassifierRule(inPort, ethType, dstMac, treatment, filterObjective);
+        return createFwdClassifierRule(inPort, ethType, dstMac, dstMacMask, treatment, filterObjective);
     }
 
     private Collection<FlowRule> createIpFwdClassifierRules(PortNumber inPort,
                                                             MacAddress dstMac,
                                                             FilteringObjective filterObjective) {
-        Collection<FlowRule> flowRules = Sets.newHashSet();
+        Collection<FlowRule> flowRules = Lists.newArrayList();
         TrafficTreatment treatment;
-        treatment = createFwdClassifierTreatment(FWD_IPV4_UNICAST);
-        flowRules.add(createFwdClassifierRule(inPort, Ethernet.TYPE_IPV4, dstMac, treatment, filterObjective));
-        treatment = createFwdClassifierTreatment(FWD_IPV6_UNICAST);
-        flowRules.add(createFwdClassifierRule(inPort, Ethernet.TYPE_IPV6, dstMac, treatment, filterObjective));
+        treatment = createFwdClassifierTreatment(FWD_IPV4_ROUTING);
+        flowRules.add(createFwdClassifierRule(inPort, Ethernet.TYPE_IPV4, dstMac, null, treatment, filterObjective));
+        treatment = createFwdClassifierTreatment(FWD_IPV6_ROUTING);
+        flowRules.add(createFwdClassifierRule(inPort, Ethernet.TYPE_IPV6, dstMac, null, treatment, filterObjective));
         return flowRules;
     }
 
@@ -205,18 +216,23 @@ public class FabricFilteringPipeliner {
                                                  MacAddress dstMac,
                                                  FilteringObjective filterObjective) {
         TrafficTreatment treatment = createFwdClassifierTreatment(FWD_MPLS);
-        return createFwdClassifierRule(inPort, Ethernet.MPLS_UNICAST, dstMac, treatment, filterObjective);
+        return createFwdClassifierRule(inPort, Ethernet.MPLS_UNICAST, dstMac, null, treatment, filterObjective);
     }
 
     private FlowRule createFwdClassifierRule(PortNumber inPort,
                                              short ethType,
                                              MacAddress dstMac,
+                                             MacAddress dstMacMask,
                                              TrafficTreatment treatment,
                                              FilteringObjective filterObjective) {
         TrafficSelector.Builder selector = DefaultTrafficSelector.builder()
                 .matchInPort(inPort)
-                .matchEthDst(dstMac)
                 .matchEthType(ethType);
+        if (dstMacMask != null) {
+            selector.matchEthDstMasked(dstMac, dstMacMask);
+        } else {
+            selector.matchEthDstMasked(dstMac, MacAddress.EXACT_MASK);
+        }
 
         return DefaultFlowRule.builder()
                 .withSelector(selector.build())
@@ -225,15 +241,15 @@ public class FabricFilteringPipeliner {
                 .withPriority(filterObjective.priority())
                 .forDevice(deviceId)
                 .makePermanent()
-                .forTable(FabricConstants.TBL_FWD_CLASSIFIER_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FILTERING_FWD_CLASSIFIER)
                 .build();
     }
 
     private TrafficTreatment createFwdClassifierTreatment(byte fwdType) {
-        PiActionParam param = new PiActionParam(FabricConstants.ACT_PRM_FWD_TYPE_ID,
+        PiActionParam param = new PiActionParam(FabricConstants.FWD_TYPE,
                                                 ImmutableByteSequence.copyFrom(fwdType));
         PiAction action = PiAction.builder()
-                .withId(FabricConstants.ACT_FILTERING_SET_FORWARDING_TYPE_ID)
+                .withId(FabricConstants.FABRIC_INGRESS_FILTERING_SET_FORWARDING_TYPE)
                 .withParameter(param)
                 .build();
         return DefaultTrafficTreatment.builder()

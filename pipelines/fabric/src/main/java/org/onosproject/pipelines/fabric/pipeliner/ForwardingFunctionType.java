@@ -19,7 +19,9 @@ package org.onosproject.pipelines.fabric.pipeliner;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import org.onlab.packet.MacAddress;
 import org.onosproject.net.flow.criteria.Criterion;
+import org.onosproject.net.flow.criteria.EthCriterion;
 import org.onosproject.net.flowobjective.ForwardingObjective;
 
 import java.util.Map;
@@ -47,22 +49,12 @@ public enum ForwardingFunctionType {
     /**
      * IPv4 unicast, with EtherType and IPv4 unicast destination address.
      */
-    IPV4_UNICAST,
-
-    /**
-     * IPv4 multicast, with EtherType and IPv4 multicast destination address.
-     */
-    IPV4_MULTICAST,
+    IPV4_ROUTING,
 
     /**
      * IPv6 unicast, with EtherType and IPv6 unicast destination address.
      */
-    IPV6_UNICAST,
-
-    /**
-     * IPv6 multicast, with EtherType and IPv6 multicast destination address.
-     */
-    IPV6_MULTICAST,
+    IPV6_ROUTING,
 
     /**
      * MPLS, with EtherType, MPLS label and MPLS BOS(true) criterion.
@@ -99,10 +91,10 @@ public enum ForwardingFunctionType {
             ImmutableMap.<Set<Criterion.Type>, ForwardingFunctionType>builder()
                     .put(L2_UNI_CRITERIA_TYPE, L2_UNICAST)
                     .put(L2_BRC_CRITERIA_TYPE, L2_BROADCAST)
-                    .put(IPV4_UNI_CRITERIA_TYPE, IPV4_UNICAST)
-                    .put(IPV4_MCAST_CRITERIA_TYPE, IPV4_MULTICAST)
-                    .put(IPV6_UNI_CRITERIA_TYPE, IPV6_UNICAST)
-                    .put(IPV6_MCAST_CRITERIA_TYPE, IPV6_MULTICAST)
+                    .put(IPV4_UNI_CRITERIA_TYPE, IPV4_ROUTING)
+                    .put(IPV4_MCAST_CRITERIA_TYPE, IPV4_ROUTING)
+                    .put(IPV6_UNI_CRITERIA_TYPE, IPV6_ROUTING)
+                    .put(IPV6_MCAST_CRITERIA_TYPE, IPV6_ROUTING)
                     .put(MPLS_UNI_CRITERIA_TYPE, MPLS)
                     .build();
 
@@ -114,14 +106,35 @@ public enum ForwardingFunctionType {
      */
     public static ForwardingFunctionType getForwardingFunctionType(ForwardingObjective fwd) {
         Set<Criterion.Type> criteriaType = Sets.newHashSet();
-        fwd.selector().criteria().stream().map(Criterion::type)
+        //omit the criterion of ethDst type with the value of MacAddress.NONE since it indicates L2 broadcast
+        //if not, the objective is treated as L2 unicast
+        fwd.selector().criteria().stream().filter(criterion -> !ethDstIndicatesBroadcast(criterion))
+                .map(Criterion::type)
                 .forEach(criteriaType::add);
 
         if (fwd.meta() != null) {
-            fwd.meta().criteria().stream().map(Criterion::type)
+            fwd.meta().criteria().stream().filter(criterion -> !ethDstIndicatesBroadcast(criterion))
+                    .map(Criterion::type)
                     .forEach(criteriaType::add);
         }
 
         return FFT_MAP.getOrDefault(criteriaType, UNSUPPORTED);
+    }
+
+    /**
+     * Segment Routing (SR) app. sets ethDst criterion to MacAddress.NONE for broadcast rules
+     * and demands drivers to treat the flow rules containing this criterion as broadcast rule.
+     *
+     * This method checks the type and value of the criterion and detects whether it constitutes
+     * broadcast or not.
+     *
+     * For more details check RoutingRulePopulator.updateSubnetBroadcastRule method of SR app.
+     *
+     * @param criterion Criterion object
+     * @return true if the type is ETH_DST and the mac value equals to MacAddress.NONE; false otherwise.
+     */
+    private static boolean ethDstIndicatesBroadcast(Criterion criterion) {
+        return criterion.type().equals(Criterion.Type.ETH_DST) &&
+                ((EthCriterion) criterion).mac().equals(MacAddress.NONE);
     }
 }

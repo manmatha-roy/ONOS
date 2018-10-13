@@ -20,15 +20,17 @@ import org.junit.Ignore;
 import org.junit.Test;
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.IPv4;
+import org.onlab.packet.MacAddress;
 import org.onlab.packet.TpPort;
 import org.onlab.packet.UDP;
-import org.onlab.util.ImmutableByteSequence;
 import org.onosproject.net.flow.DefaultFlowRule;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.FlowRule;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
+import org.onosproject.net.flow.criteria.Criterion;
+import org.onosproject.net.flow.criteria.EthCriterion;
 import org.onosproject.net.flowobjective.DefaultForwardingObjective;
 import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.group.GroupDescription;
@@ -79,7 +81,7 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
         FlowRule expectedFlowRule = DefaultFlowRule.builder()
                 .forDevice(DEVICE_ID)
-                .forTable(FabricConstants.TBL_ACL_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_ACL)
                 .withPriority(PRIORITY)
                 .makePermanent()
                 .withSelector(selector)
@@ -125,7 +127,7 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
         FlowRule expectedFlowRule = DefaultFlowRule.builder()
                 .forDevice(DEVICE_ID)
-                .forTable(FabricConstants.TBL_ACL_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_ACL)
                 .withPriority(PRIORITY)
                 .makePermanent()
                 .withSelector(selector)
@@ -145,7 +147,8 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
                 .matchVlanId(VLAN_100)
                 .matchEthDst(HOST_MAC)
                 .build();
-        testSpecificForward(FabricConstants.TBL_BRIDGING_ID, selector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_BRIDGING,
+                            buildExpectedSelector(selector), selector, NEXT_ID_1);
     }
 
     @Test
@@ -153,7 +156,8 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         TrafficSelector selector = DefaultTrafficSelector.builder()
                 .matchVlanId(VLAN_100)
                 .build();
-        testSpecificForward(FabricConstants.TBL_BRIDGING_ID, selector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_BRIDGING,
+                            selector, selector, NEXT_ID_1);
     }
 
     @Test
@@ -165,7 +169,21 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         TrafficSelector expectedSelector = DefaultTrafficSelector.builder()
                 .matchIPDst(IPV4_UNICAST_ADDR)
                 .build();
-        testSpecificForward(FabricConstants.TBL_UNICAST_V4_ID, expectedSelector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4,
+                            expectedSelector, selector, NEXT_ID_1);
+    }
+
+    @Test
+    public void testIPv4UnicastWithNoNextId() {
+        TrafficSelector selector = DefaultTrafficSelector.builder()
+                .matchEthType(Ethernet.TYPE_IPV4)
+                .matchIPDst(IPV4_UNICAST_ADDR)
+                .build();
+        TrafficSelector expectedSelector = DefaultTrafficSelector.builder()
+                .matchIPDst(IPV4_UNICAST_ADDR)
+                .build();
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4,
+                            expectedSelector, selector, null);
     }
 
     @Test
@@ -179,7 +197,8 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         TrafficSelector expectedSelector = DefaultTrafficSelector.builder()
                 .matchIPDst(IPV4_MCAST_ADDR)
                 .build();
-        testSpecificForward(FabricConstants.TBL_MULTICAST_V4_ID, expectedSelector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4,
+                            expectedSelector, selector, NEXT_ID_1);
     }
 
     @Test
@@ -192,7 +211,9 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         TrafficSelector expectedSelector = DefaultTrafficSelector.builder()
                 .matchIPDst(IPV6_UNICAST_ADDR)
                 .build();
-        testSpecificForward(FabricConstants.TBL_UNICAST_V6_ID, expectedSelector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V6,
+                            expectedSelector, selector, NEXT_ID_1);
+
     }
 
     @Test
@@ -206,7 +227,8 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
         TrafficSelector expectedSelector = DefaultTrafficSelector.builder()
                 .matchIPDst(IPV6_MCAST_ADDR)
                 .build();
-        testSpecificForward(FabricConstants.TBL_MULTICAST_V6_ID, expectedSelector, selector, NEXT_ID_1);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V6,
+                            expectedSelector, selector, NEXT_ID_1);
     }
 
     @Test
@@ -220,29 +242,41 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
                 .matchMplsLabel(MPLS_10)
                 .build();
 
-        PiActionParam nextIdParam = new PiActionParam(FabricConstants.ACT_PRM_NEXT_ID_ID,
-                                                      ImmutableByteSequence.copyFrom(NEXT_ID_1.byteValue()));
+        PiActionParam nextIdParam = new PiActionParam(FabricConstants.NEXT_ID, NEXT_ID_1);
         PiAction setNextIdAction = PiAction.builder()
-                .withId(FabricConstants.ACT_FORWARDING_POP_MPLS_AND_NEXT_ID)
+                .withId(FabricConstants.FABRIC_INGRESS_FORWARDING_POP_MPLS_AND_NEXT)
                 .withParameter(nextIdParam)
                 .build();
         TrafficTreatment treatment = DefaultTrafficTreatment.builder()
                 .piTableAction(setNextIdAction)
                 .build();
-        testSpecificForward(FabricConstants.TBL_MPLS_ID, expectedSelector, selector, NEXT_ID_1, treatment);
+        testSpecificForward(FabricConstants.FABRIC_INGRESS_FORWARDING_MPLS,
+                            expectedSelector, selector, NEXT_ID_1, treatment);
     }
 
     private void testSpecificForward(PiTableId expectedTableId, TrafficSelector expectedSelector,
                                      TrafficSelector selector, Integer nextId) {
-        PiActionParam nextIdParam = new PiActionParam(FabricConstants.ACT_PRM_NEXT_ID_ID,
-                                                      ImmutableByteSequence.copyFrom(nextId.byteValue()));
-        PiAction setNextIdAction = PiAction.builder()
-                .withId(FabricConstants.ACT_FORWARDING_SET_NEXT_ID_ID)
-                .withParameter(nextIdParam)
-                .build();
-        TrafficTreatment setNextIdTreatment = DefaultTrafficTreatment.builder()
-                .piTableAction(setNextIdAction)
-                .build();
+        TrafficTreatment setNextIdTreatment;
+        if (nextId == null) {
+            // Ref: RoutingRulePopulator.java->revokeIpRuleForRouter
+            setNextIdTreatment = DefaultTrafficTreatment.builder().build();
+        } else {
+            PiActionParam nextIdParam = new PiActionParam(FabricConstants.NEXT_ID, nextId);
+            PiAction.Builder setNextIdAction = PiAction.builder()
+                    .withParameter(nextIdParam);
+
+            if (expectedTableId.equals(FabricConstants.FABRIC_INGRESS_FORWARDING_BRIDGING)) {
+                setNextIdAction.withId(FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_BRIDGING);
+            } else if (expectedTableId.equals(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4)) {
+                setNextIdAction.withId(FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_ROUTING_V4);
+            } else if (expectedTableId.equals(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V6)) {
+                setNextIdAction.withId(FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_ROUTING_V6);
+            }
+
+            setNextIdTreatment = DefaultTrafficTreatment.builder()
+                    .piTableAction(setNextIdAction.build())
+                    .build();
+        }
 
         testSpecificForward(expectedTableId, expectedSelector, selector, nextId, setNextIdTreatment);
 
@@ -250,16 +284,19 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
 
     private void testSpecificForward(PiTableId expectedTableId, TrafficSelector expectedSelector,
                                      TrafficSelector selector, Integer nextId, TrafficTreatment treatment) {
-        ForwardingObjective fwd = DefaultForwardingObjective.builder()
+        ForwardingObjective.Builder fwd = DefaultForwardingObjective.builder()
                 .withSelector(selector)
                 .withPriority(PRIORITY)
                 .fromApp(APP_ID)
                 .makePermanent()
-                .withFlag(ForwardingObjective.Flag.SPECIFIC)
-                .nextStep(nextId)
-                .add();
+                .withTreatment(treatment)
+                .withFlag(ForwardingObjective.Flag.SPECIFIC);
 
-        PipelinerTranslationResult result = pipeliner.pipelinerForward.forward(fwd);
+        if (nextId != null) {
+            fwd.nextStep(nextId);
+        }
+
+        PipelinerTranslationResult result = pipeliner.pipelinerForward.forward(fwd.add());
 
         List<FlowRule> flowRulesInstalled = (List<FlowRule>) result.flowRules();
         List<GroupDescription> groupsInstalled = (List<GroupDescription>) result.groups();
@@ -279,5 +316,17 @@ public class FabricForwardingPipelineTest extends FabricPipelinerTest {
                 .build();
 
         assertTrue(expectedFlowRule.exactMatch(actualFlowRule));
+    }
+
+    private TrafficSelector buildExpectedSelector(TrafficSelector selector) {
+        TrafficSelector.Builder sbuilder = DefaultTrafficSelector.builder();
+        selector.criteria().forEach(c -> {
+            if (c.type() == Criterion.Type.ETH_DST) {
+                sbuilder.matchEthDstMasked(((EthCriterion) c).mac(), MacAddress.EXACT_MASK);
+            } else {
+                sbuilder.add(c);
+            }
+        });
+        return sbuilder.build();
     }
 }

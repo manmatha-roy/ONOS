@@ -17,10 +17,17 @@ The VM is based on Ubuntu 16.04 (server) and contains the following software:
 - p4c (P4 compiler)
 - Mininet (network emulator)
 
+### Tutorial VM
+
+It is possible to generate a variant of the VM to be used during tutorials. This
+version of the VM comes with a Lubuntu desktop environment and various code
+editors with P4 syntax highlighting (vim, Sublime Text, and Atom).
+
 ## Recommended system requirements
 
-The VM is configured with 4 GB of RAM and 2 CPU cores, while the disk has size
-of approx. 8 GB. For a flawless experience we recommend running the VM on a host
+The VM is configured with 4 GB of RAM and 2 CPU cores (4 cores for the tutorial
+variant). The disk has size of approx. 4 GB but expect to grow up to 8 GB when
+building ONOS. For a flawless experience we recommend running the VM on a host
 system that has at least the double of resources.
 
 These are the recommended minimum requirements to be able to run a Mininet
@@ -41,8 +48,11 @@ connection speed. If you would rather not wait, you can use the following link
 to download an Open Virtual Appliance (OVA) package to be imported using
 VirtualBox or any other x86 virtualization system that supports this format.
 
-Pre-built OVA package (approx. 3.5 GB):
+Pre-built OVA package (approx. 1.5 GB):
 <http://onlab.vicci.org/onos/onos-p4-dev.ova>
+
+The tutorial variant of the OVA package can be found here (approx 2.3 GB):
+<http://onlab.vicci.org/onos/onos-p4-tutorial.ova>
 
 ### Login credentials
 
@@ -56,8 +66,8 @@ Use these credentials to log in the guest Ubuntu system.
 To build the VM you will need the following software installed in your host
 machine:
 
-- [Vagrant](https://www.vagrantup.com/) (tested v2.0.1)
-- [VirtualBox](https://www.virtualbox.org/wiki/Downloads) (tested with v5.2.2)
+- [Vagrant](https://www.vagrantup.com/) (tested v2.1.1)
+- [VirtualBox](https://www.virtualbox.org/wiki/Downloads) (tested with v5.2.10)
 
 Optionally, to export the VM as an OVA package you will also need
 [sshpass](https://gist.github.com/arunoda/7790979).
@@ -98,4 +108,19 @@ This script will:
 3. reduce VM disk size (by removing build artifacts);
 4. generate a file named `onos-p4-dev.ova`.
 
-The generated OVA file will have size of approx. 3.5-4 GB.
+### Building the tutorial VM
+
+To build the tutorial VM, simply set the environment variable `P4_VM_TYPE` to `tutorial` before building.
+
+For example:
+
+```bash
+P4_VM_TYPE=tutorial vagrant up
+```
+
+In alternative, to generate the OVA package:
+
+```bash
+P4_VM_TYPE=tutorial ./export-ova.sh
+```
+

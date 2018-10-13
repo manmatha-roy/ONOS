@@ -203,7 +203,7 @@ public class IntentCleanup implements Runnable, IntentListener {
             case INSTALL_REQ:
             case WITHDRAW_REQ:
             case PURGE_REQ:
-                service.addPending(intentData);
+                service.addPending(IntentData.copy(intentData, new WallClockTimestamp()));
                 break;
             default:
                 log.warn("Failed to resubmit pending intent {} in state {} with request {}",
@@ -229,16 +229,21 @@ public class IntentCleanup implements Runnable, IntentListener {
         }
 
         for (IntentData intentData : store.getIntentData(true, periodMs)) {
+            IntentData pendingIntentData = store.getPendingData(intentData.key());
+            if (pendingIntentData != null) {
+                continue;
+            }
+
             switch (intentData.state()) {
                 case FAILED:
                     log.debug("Resubmit Failed Intent: key {}, state {}, request {}",
-                              intentData.key(), intentData.state(), intentData.request());
+                            intentData.key(), intentData.state(), intentData.request());
                     resubmitCorrupt(intentData, false);
                     failedCount++;
                     break;
                 case CORRUPT:
                     log.debug("Resubmit Corrupt Intent: key {}, state {}, request {}",
-                              intentData.key(), intentData.state(), intentData.request());
+                            intentData.key(), intentData.state(), intentData.request());
                     resubmitCorrupt(intentData, false);
                     corruptCount++;
                     break;

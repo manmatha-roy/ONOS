@@ -18,6 +18,7 @@
 #define __HEADER__
 
 #include "define.p4"
+#include "int/int_header.p4"
 
 @controller_header("packet_in")
 header packet_in_header_t {
@@ -25,7 +26,7 @@ header packet_in_header_t {
     bit<7> _pad;
 }
 
-_PKT_OUT_HDR_ANNOT_
+_PKT_OUT_HDR_ANNOT
 @controller_header("packet_out")
 header packet_out_header_t {
     port_num_t egress_port;
@@ -55,7 +56,8 @@ header mpls_t {
 header ipv4_t {
     bit<4> version;
     bit<4> ihl;
-    bit<8> diffserv;
+    bit<6> dscp;
+    bit<2> ecn;
     bit<16> total_len;
     bit<16> identification;
     bit<3> flags;
@@ -131,7 +133,6 @@ header gtpu_t {
 }
 
 struct spgw_meta_t {
-    bool              do_spgw;
     direction_t       direction;
     bit<16>           ipv4_len;
     bit<32>           teid;
@@ -151,14 +152,19 @@ struct spgw_meta_t {
 struct fabric_metadata_t {
     fwd_type_t fwd_type;
     next_id_t next_id;
-    bool pop_vlan_at_egress;
+    _BOOL pop_vlan_when_packet_in;
+    _BOOL is_multicast;
+    _BOOL is_controller_packet_out;
+    _BOOL clone_to_cpu;
     bit<8> ip_proto;
     bit<16> l4_src_port;
     bit<16> l4_dst_port;
-    bit<16> original_ether_type;
 #ifdef WITH_SPGW
     spgw_meta_t spgw;
 #endif // WITH_SPGW
+#ifdef WITH_INT
+    int_metadata_t int_meta;
+#endif // WITH_INT
 }
 
 struct parsed_headers_t {
@@ -169,6 +175,8 @@ struct parsed_headers_t {
     ipv4_t gtpu_ipv4;
     udp_t gtpu_udp;
     gtpu_t gtpu;
+    ipv4_t inner_ipv4;
+    udp_t inner_udp;
 #endif // WITH_SPGW
     ipv4_t ipv4;
 #ifdef WITH_IPV6
@@ -180,6 +188,30 @@ struct parsed_headers_t {
     icmp_t icmp;
     packet_out_header_t packet_out;
     packet_in_header_t packet_in;
+#ifdef WITH_INT_SINK
+    // INT Report encap
+    ethernet_t report_ethernet;
+    ipv4_t report_ipv4;
+    udp_t report_udp;
+    // INT Report header (support only fixed)
+    report_fixed_header_t report_fixed_header;
+    // local_report_t report_local;
+#endif // WITH_INT_SINK
+#ifdef WITH_INT
+    // INT specific headers
+    intl4_shim_t intl4_shim;
+    int_header_t int_header;
+    int_switch_id_t int_switch_id;
+    int_port_ids_t int_port_ids;
+    int_hop_latency_t int_hop_latency;
+    int_q_occupancy_t int_q_occupancy;
+    int_ingress_tstamp_t int_ingress_tstamp;
+    int_egress_tstamp_t int_egress_tstamp;
+    int_q_congestion_t int_q_congestion;
+    int_egress_port_tx_util_t int_egress_tx_util;
+    int_data_t int_data;
+    intl4_tail_t intl4_tail;
+#endif //WITH_INT
 }
 
 #endif

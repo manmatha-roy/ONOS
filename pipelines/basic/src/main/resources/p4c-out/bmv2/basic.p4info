@@ -1,7 +1,7 @@
 tables {
   preamble {
-    id: 33571508
-    name: "table0_control.table0"
+    id: 33561568
+    name: "ingress.table0_control.table0"
     alias: "table0"
   }
   match_fields {
@@ -59,25 +59,48 @@ tables {
     match_type: TERNARY
   }
   action_refs {
-    id: 16794308
+    id: 16822046
   }
   action_refs {
-    id: 16829080
+    id: 16783057
   }
   action_refs {
-    id: 16802895
+    id: 16777316
   }
   action_refs {
     id: 16784184
   }
   const_default_action_id: 16784184
-  direct_resource_ids: 302046050
+  direct_resource_ids: 318816189
   size: 1024
+  idle_timeout_behavior: NO_TIMEOUT
 }
 tables {
   preamble {
-    id: 33592597
-    name: "wcmp_control.wcmp_table"
+    id: 33571781
+    name: "ingress.host_meter_control.host_meter_table"
+    alias: "host_meter_table"
+  }
+  match_fields {
+    id: 1
+    name: "hdr.ethernet.src_addr"
+    bitwidth: 48
+    match_type: LPM
+  }
+  action_refs {
+    id: 16823832
+  }
+  action_refs {
+    id: 16800567
+  }
+  direct_resource_ids: 352337889
+  size: 1024
+  idle_timeout_behavior: NO_TIMEOUT
+}
+tables {
+  preamble {
+    id: 33594717
+    name: "ingress.wcmp_control.wcmp_table"
     alias: "wcmp_table"
   }
   match_fields {
@@ -87,34 +110,16 @@ tables {
     match_type: EXACT
   }
   action_refs {
-    id: 16794308
+    id: 16796092
   }
   action_refs {
     id: 16800567
     annotations: "@defaultonly()"
   }
-  implementation_id: 285259294
-  direct_resource_ids: 302001091
+  implementation_id: 285253634
+  direct_resource_ids: 318811794
   size: 1024
-}
-actions {
-  preamble {
-    id: 16794308
-    name: "set_egress_port"
-    alias: "set_egress_port"
-  }
-  params {
-    id: 1
-    name: "port"
-    bitwidth: 9
-  }
-}
-actions {
-  preamble {
-    id: 16829080
-    name: "send_to_cpu"
-    alias: "send_to_cpu"
-  }
+  idle_timeout_behavior: NO_TIMEOUT
 }
 actions {
   preamble {
@@ -132,8 +137,8 @@ actions {
 }
 actions {
   preamble {
-    id: 16802895
-    name: "table0_control.set_next_hop_id"
+    id: 16777316
+    name: "ingress.table0_control.set_next_hop_id"
     alias: "set_next_hop_id"
   }
   params {
@@ -142,20 +147,58 @@ actions {
     bitwidth: 16
   }
 }
+actions {
+  preamble {
+    id: 16783057
+    name: "ingress.table0_control.send_to_cpu"
+    alias: "send_to_cpu"
+  }
+}
+actions {
+  preamble {
+    id: 16822046
+    name: "ingress.table0_control.set_egress_port"
+    alias: "table0_control.set_egress_port"
+  }
+  params {
+    id: 1
+    name: "port"
+    bitwidth: 9
+  }
+}
+actions {
+  preamble {
+    id: 16823832
+    name: "ingress.host_meter_control.read_meter"
+    alias: "read_meter"
+  }
+}
+actions {
+  preamble {
+    id: 16796092
+    name: "ingress.wcmp_control.set_egress_port"
+    alias: "wcmp_control.set_egress_port"
+  }
+  params {
+    id: 1
+    name: "port"
+    bitwidth: 9
+  }
+}
 action_profiles {
   preamble {
-    id: 285259294
-    name: "wcmp_control.wcmp_selector"
+    id: 285253634
+    name: "ingress.wcmp_control.wcmp_selector"
     alias: "wcmp_selector"
   }
-  table_ids: 33592597
+  table_ids: 33594717
   with_selector: true
   size: 64
 }
 counters {
   preamble {
-    id: 302012579
-    name: "port_counters_ingress.ingress_port_counter"
+    id: 302004684
+    name: "ingress.port_counters_ingress.ingress_port_counter"
     alias: "ingress_port_counter"
   }
   spec {
@@ -165,8 +208,8 @@ counters {
 }
 counters {
   preamble {
-    id: 302012501
-    name: "port_counters_egress.egress_port_counter"
+    id: 302040487
+    name: "egress.port_counters_egress.egress_port_counter"
     alias: "egress_port_counter"
   }
   spec {
@@ -176,29 +219,40 @@ counters {
 }
 direct_counters {
   preamble {
-    id: 302046050
-    name: "table0_control.table0_counter"
+    id: 318816189
+    name: "ingress.table0_control.table0_counter"
     alias: "table0_counter"
   }
   spec {
     unit: BOTH
   }
-  direct_table_id: 33571508
+  direct_table_id: 33561568
 }
 direct_counters {
   preamble {
-    id: 302001091
-    name: "wcmp_control.wcmp_table_counter"
+    id: 318811794
+    name: "ingress.wcmp_control.wcmp_table_counter"
     alias: "wcmp_table_counter"
   }
   spec {
     unit: BOTH
   }
-  direct_table_id: 33592597
+  direct_table_id: 33594717
+}
+direct_meters {
+  preamble {
+    id: 352337889
+    name: "ingress.host_meter_control.host_meter"
+    alias: "host_meter"
+  }
+  spec {
+    unit: BYTES
+  }
+  direct_table_id: 33571781
 }
 controller_packet_metadata {
   preamble {
-    id: 2868941301
+    id: 67146229
     name: "packet_in"
     annotations: "@controller_header(\"packet_in\")"
   }
@@ -207,10 +261,15 @@ controller_packet_metadata {
     name: "ingress_port"
     bitwidth: 9
   }
+  metadata {
+    id: 2
+    name: "_padding"
+    bitwidth: 7
+  }
 }
 controller_packet_metadata {
   preamble {
-    id: 2868916615
+    id: 67121543
     name: "packet_out"
     annotations: "@controller_header(\"packet_out\")"
   }
@@ -219,4 +278,11 @@ controller_packet_metadata {
     name: "egress_port"
     bitwidth: 9
   }
+  metadata {
+    id: 2
+    name: "_padding"
+    bitwidth: 7
+  }
+}
+type_info {
 }

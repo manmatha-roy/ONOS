@@ -50,8 +50,6 @@ public class OpticalDriversLoader extends AbstractDriverLoader {
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected NetworkConfigRegistry registry = new NetworkConfigRegistryAdapter();
 
-
-
     private final List<ConfigFactory> factories = ImmutableList.of(
          new ConfigFactory<DeviceId, FlowTableConfig>(DEVICE_SUBJECT_FACTORY,
                  FlowTableConfig.class,

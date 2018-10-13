@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.ClosedChannelException;
+import java.security.cert.Certificate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,6 +37,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+
 import org.onlab.packet.IpAddress;
 import org.onosproject.openflow.controller.Dpid;
 import org.onosproject.openflow.controller.OpenFlowSession;
@@ -86,9 +88,12 @@ import org.slf4j.LoggerFactory;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.util.ReferenceCountUtil;
+
+import javax.net.ssl.SSLPeerUnverifiedException;
 
 /**
  * Channel handler deals with the switch connection and dispatches
@@ -310,9 +315,15 @@ class OFChannelHandler extends ChannelInboundHandlerAdapter
          */
         WAIT_FEATURES_REPLY(false) {
             @Override
-            void processOFFeaturesReply(OFChannelHandler h, OFFeaturesReply  m)
+            void processOFFeaturesReply(OFChannelHandler h, OFFeaturesReply m)
                     throws IOException {
-                h.thisdpid = m.getDatapathId().getLong();
+                Long dpid = m.getDatapathId().getLong();
+                if (!h.setDpid(dpid, h.channel)) {
+                    log.error("Switch presented invalid certificate for dpid {}. Disconnecting",
+                            dpid);
+                    h.channel.disconnect();
+                    return;
+                }
                 log.debug("Received features reply for switch at {} with dpid {}",
                         h.getSwitchInfoString(), h.thisdpid);
 
@@ -1351,12 +1362,15 @@ class OFChannelHandler extends ChannelInboundHandlerAdapter
     private void channelIdle(ChannelHandlerContext ctx,
                                IdleStateEvent e)
             throws IOException {
-        OFMessage m = factory.buildEchoRequest().build();
-        log.debug("Sending Echo Request on idle channel: {}",
-                  ctx.channel());
-        ctx.write(Collections.singletonList(m), ctx.voidPromise());
-        // XXX S some problems here -- echo request has no transaction id, and
-        // echo reply is not correlated to the echo request.
+        // Factory can be null if the channel goes idle during initial handshake. Since the switch
+        // is not even initialized properly, we just skip this and disconnect the channel.
+        if (factory != null) {
+            OFMessage m = factory.buildEchoRequest().build();
+            log.debug("Sending Echo Request on idle channel: {}", ctx.channel());
+            ctx.write(Collections.singletonList(m), ctx.voidPromise());
+            // XXX S some problems here -- echo request has no transaction id, and
+            // echo reply is not correlated to the echo request.
+        }
         state.processIdle(this);
     }
 
@@ -1500,6 +1514,25 @@ class OFChannelHandler extends ChannelInboundHandlerAdapter
     private void setState(ChannelState state) {
         this.state = state;
         this.lastStateChange = System.currentTimeMillis();
+    }
+
+    private boolean setDpid(Long dpid, Channel channel) {
+        ChannelHandlerContext sslContext = channel.pipeline().context(SslHandler.class);
+        if (sslContext != null) {
+            try {
+                SslHandler sslHandler = (SslHandler) sslContext.handler();
+                Certificate[] certs = sslHandler.engine().getSession().getPeerCertificates();
+                Certificate cert = certs.length > 0 ? certs[0] : null;
+                if (!controller.isValidCertificate(dpid, cert)) {
+                    return false;
+                }
+            } catch (SSLPeerUnverifiedException e) {
+                log.info("Switch with dpid {} is an unverified SSL peer.", dpid, e);
+                return false;
+            }
+        }
+        this.thisdpid = dpid;
+        return true;
     }
 
     /**

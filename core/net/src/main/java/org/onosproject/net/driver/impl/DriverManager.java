@@ -25,6 +25,8 @@ import org.onlab.util.ItemNotFoundException;
 import org.onosproject.net.AbstractProjectableModel;
 import org.onosproject.net.Device;
 import org.onosproject.net.DeviceId;
+import org.onosproject.net.config.NetworkConfigService;
+import org.onosproject.net.config.basics.BasicDeviceConfig;
 import org.onosproject.net.device.DeviceService;
 import org.onosproject.net.driver.Behaviour;
 import org.onosproject.net.driver.DefaultDriverData;
@@ -34,6 +36,8 @@ import org.onosproject.net.driver.DriverHandler;
 import org.onosproject.net.driver.DriverListener;
 import org.onosproject.net.driver.DriverRegistry;
 import org.onosproject.net.driver.DriverService;
+import org.onosproject.net.pi.model.PiPipeconfId;
+import org.onosproject.net.pi.service.PiPipeconfService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +69,12 @@ public class DriverManager implements DriverService {
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected DeviceService deviceService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
+    protected NetworkConfigService networkConfigService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
+    protected PiPipeconfService pipeconfService;
 
     @Activate
     protected void activate() {
@@ -108,8 +118,59 @@ public class DriverManager implements DriverService {
     public Driver getDriver(DeviceId deviceId) {
         checkPermission(DRIVER_READ);
 
+        Driver driver;
+
+        // Special processing for devices with pipeconf.
+        if (pipeconfService.ofDevice(deviceId).isPresent()) {
+            // No fallback for pipeconf merged drivers. Returns null if driver
+            // does not exist.
+            return getPipeconfMergedDriver(deviceId);
+        }
+
+        // Primary source of driver configuration is the network config.
+        BasicDeviceConfig cfg = networkConfigService.getConfig(deviceId, BasicDeviceConfig.class);
+        driver = lookupDriver(cfg != null ? cfg.driver() : null);
+        if (driver != null) {
+            return driver;
+        }
+
+        // Secondary source of the driver selection is driver annotation.
         Device device = nullIsNotFound(deviceService.getDevice(deviceId), NO_DEVICE);
-        String driverName = device.annotations().value(DRIVER);
+        driver = lookupDriver(device.annotations().value(DRIVER));
+        if (driver != null) {
+            return driver;
+        }
+
+        // Tertiary source of the driver selection is the primordial information
+        // obtained from the device.
+        return nullIsNotFound(getDriver(device.manufacturer(),
+                                        device.hwVersion(), device.swVersion()),
+                              NO_DRIVER);
+    }
+
+    private Driver getPipeconfMergedDriver(DeviceId deviceId) {
+        PiPipeconfId pipeconfId = pipeconfService.ofDevice(deviceId).orElse(null);
+        if (pipeconfId == null) {
+            log.warn("Missing pipeconf for {}, cannot produce a pipeconf merged driver",
+                      deviceId);
+            return null;
+        }
+        String mergedDriverName = pipeconfService.getMergedDriver(deviceId, pipeconfId);
+        if (mergedDriverName == null) {
+            log.warn("Unable to get pipeconf merged driver for {} and {}",
+                     deviceId, pipeconfId);
+            return null;
+        }
+        try {
+            return getDriver(mergedDriverName);
+        } catch (ItemNotFoundException e) {
+            log.warn("Specified pipeconf merged driver {} for {} not found",
+                     mergedDriverName, deviceId);
+            return null;
+        }
+    }
+
+    private Driver lookupDriver(String driverName) {
         if (driverName != null) {
             try {
                 return getDriver(driverName);
@@ -117,10 +178,7 @@ public class DriverManager implements DriverService {
                 log.warn("Specified driver {} not found, falling back.", driverName);
             }
         }
-
-        return nullIsNotFound(getDriver(device.manufacturer(),
-                                        device.hwVersion(), device.swVersion()),
-                              NO_DRIVER);
+        return null;
     }
 
     @Override

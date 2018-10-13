@@ -17,6 +17,7 @@ package org.onosproject.netconf.ctl.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.easymock.EasyMock;
 import org.junit.After;
 import org.junit.Before;
@@ -35,7 +36,6 @@ import org.onosproject.net.config.NetworkConfigRegistryAdapter;
 import org.onosproject.net.device.DeviceService;
 import org.onosproject.net.key.DeviceKeyService;
 import org.onosproject.netconf.NetconfDevice;
-import org.onosproject.netconf.NetconfDeviceFactory;
 import org.onosproject.netconf.NetconfDeviceInfo;
 import org.onosproject.netconf.NetconfDeviceListener;
 import org.onosproject.netconf.NetconfDeviceOutputEvent;
@@ -120,7 +120,7 @@ public class NetconfControllerImplTest {
     @Before
     public void setUp() throws Exception {
         ctrl = new NetconfControllerImpl();
-        ctrl.deviceFactory = new TestNetconfDeviceFactory();
+        ctrl.deviceFactory = (ncDevInfo) -> new TestNetconfDevice(ncDevInfo);
         ctrl.cfgService = cfgService;
         ctrl.deviceService = deviceService;
         ctrl.deviceKeyService = deviceKeyService;
@@ -132,7 +132,7 @@ public class NetconfControllerImplTest {
         //Creating mock devices
         deviceInfo1 = new NetconfDeviceInfo("device1", "001", IpAddress.valueOf(DEVICE_1_IP), DEVICE_1_PORT);
         deviceInfo2 = new NetconfDeviceInfo("device2", "002", IpAddress.valueOf(DEVICE_2_IP), DEVICE_2_PORT);
-        deviceInfo2.setSshClientLib(Optional.of(NetconfSshClientLib.ETHZ_SSH2));
+        deviceInfo2.setSshClientLib(Optional.of(NetconfSshClientLib.APACHE_MINA));
         badDeviceInfo3 = new NetconfDeviceInfo("device3", "003", IpAddress.valueOf(BAD_DEVICE_IP), BAD_DEVICE_PORT);
         deviceInfoIpV6 = new NetconfDeviceInfo("deviceIpv6", "004", IpAddress.valueOf(DEVICE_IPV6), IPV6_DEVICE_PORT);
 
@@ -147,7 +147,7 @@ public class NetconfControllerImplTest {
                 "  \"" + NetconfDeviceConfig.CONNECT_TIMEOUT + "\":" + DEVICE_10_CONNECT_TIMEOUT + ",\n" +
                 "  \"" + NetconfDeviceConfig.REPLY_TIMEOUT + "\":" + DEVICE_10_REPLY_TIMEOUT + ",\n" +
                 "  \"" + NetconfDeviceConfig.IDLE_TIMEOUT + "\":" + DEVICE_10_IDLE_TIMEOUT + ",\n" +
-                "  \"" + NetconfDeviceConfig.SSHCLIENT + "\":\"" + NetconfSshClientLib.ETHZ_SSH2.toString() + "\"\n" +
+                "  \"" + NetconfDeviceConfig.SSHCLIENT + "\":\"" + NetconfSshClientLib.APACHE_MINA.toString() + "\"\n" +
                 "}";
         InputStream jsonStream = new ByteArrayInputStream(jsonMessage.getBytes());
         JsonNode jsonNode = mapper.readTree(jsonStream);
@@ -218,7 +218,7 @@ public class NetconfControllerImplTest {
                      2, ctrl.netconfConnectTimeout);
         assertEquals("Incorrect NetConf session timeout",
                      1, ctrl.netconfReplyTimeout);
-        assertEquals("ethz-ssh2", ctrl.sshLibrary.toString());
+        assertEquals(NetconfSshClientLib.APACHE_MINA.toString(), ctrl.sshLibrary.toString());
     }
 
     /**
@@ -308,7 +308,7 @@ public class NetconfControllerImplTest {
                 DEVICE_10_IDLE_TIMEOUT);
         assertEquals("Incorrect device fetched - sshClient",
                 fetchedDevice10.getDeviceInfo().sshClientLib().get(),
-                NetconfSshClientLib.ETHZ_SSH2);
+                NetconfSshClientLib.APACHE_MINA);
     }
 
     /**
@@ -398,17 +398,6 @@ public class NetconfControllerImplTest {
     }
 
     /**
-     * Mock NetconfDeviceFactory class.
-     */
-    private class TestNetconfDeviceFactory implements NetconfDeviceFactory {
-
-        @Override
-        public NetconfDevice createNetconfDevice(NetconfDeviceInfo netconfDeviceInfo) throws NetconfException {
-            return new TestNetconfDevice(netconfDeviceInfo);
-        }
-    }
-
-    /**
      * Mock NetconfDeviceImpl class, used for creating test devices.
      */
     protected class TestNetconfDevice implements NetconfDevice {
@@ -485,7 +474,7 @@ public class NetconfControllerImplTest {
             } else if (key.equals("netconfReplyTimeout")) {
                 return "1";
             } else if (key.equals("sshLibrary")) {
-                return "ethz-ssh2";
+                return NetconfSshClientLib.APACHE_MINA.toString();
             }
             return null;
         }

@@ -27,26 +27,15 @@ control Forwarding (
     inout fabric_metadata_t fabric_metadata,
     inout standard_metadata_t standard_metadata) {
 
+    /*
+     * Bridging Table.
+     * Matches destination mac address and VLAN Id and make egress decision.
+     */
     direct_counter(CounterType.packets_and_bytes) bridging_counter;
-    direct_counter(CounterType.packets_and_bytes) mpls_counter;
-    direct_counter(CounterType.packets_and_bytes) unicast_v4_counter;
-    direct_counter(CounterType.packets_and_bytes) acl_counter;
 
-    action drop() {
-        mark_to_drop();
-    }
-
-    action set_next_id(next_id_t next_id) {
+    action set_next_id_bridging(next_id_t next_id) {
         fabric_metadata.next_id = next_id;
-    }
-
-    action pop_mpls_and_next(next_id_t next_id) {
-        hdr.mpls.setInvalid();
-        fabric_metadata.next_id = next_id;
-    }
-
-    action duplicate_to_controller() {
-        standard_metadata.egress_spec = CPU_PORT;
+        bridging_counter.count();
     }
 
     table bridging {
@@ -56,9 +45,21 @@ control Forwarding (
         }
 
         actions = {
-            set_next_id;
+            set_next_id_bridging;
         }
         counters = bridging_counter;
+    }
+
+    /*
+     * MPLS Table.
+     * Matches MPLS label and make egress decision.
+     */
+    direct_counter(CounterType.packets_and_bytes) mpls_counter;
+
+    action pop_mpls_and_next(next_id_t next_id) {
+        hdr.mpls.setInvalid();
+        fabric_metadata.next_id = next_id;
+        mpls_counter.count();
     }
 
     table mpls {
@@ -72,63 +73,65 @@ control Forwarding (
         counters = mpls_counter;
     }
 
-    table unicast_v4 {
+    /*
+     * IPv4 Routing Table.
+     * Matches IPv4 prefix and make egress decision.
+     */
+    direct_counter(CounterType.packets_and_bytes) routing_v4_counter;
+
+    action set_next_id_routing_v4(next_id_t next_id) {
+        fabric_metadata.next_id = next_id;
+        routing_v4_counter.count();
+    }
+
+    action nop_routing_v4() {
+        routing_v4_counter.count();
+    }
+
+    table routing_v4 {
         key = {
             hdr.ipv4.dst_addr: lpm;
         }
 
         actions = {
-            set_next_id;
+            set_next_id_routing_v4;
+            nop_routing_v4;
         }
-        counters = unicast_v4_counter;
+        counters = routing_v4_counter;
     }
 
-#ifdef WITH_MULTICAST
-    direct_counter(CounterType.packets_and_bytes) multicast_v4_counter;
+    /*
+     * ACL Table.
+     * Make final egress decision based on general metch fields.
+     */
+    direct_counter(CounterType.packets_and_bytes) acl_counter;
 
-    table multicast_v4 {
-        key = {
-            hdr.vlan_tag.vlan_id: exact;
-            hdr.ipv4.dst_addr: lpm;
-        }
-
-        actions = {
-            set_next_id;
-        }
-        counters = multicast_v4_counter;
-    }
-#endif // WITH_MULTICAST
-
-#ifdef WITH_IPV6
-    direct_counter(CounterType.packets_and_bytes) unicast_v6_counter;
-
-    table unicast_v6 {
-        key = {
-            hdr.ipv6.dst_addr: lpm;
-        }
-
-        actions = {
-            set_next_id;
-        }
-        counters = unicast_v6_counter;
+    action set_next_id_acl(next_id_t next_id) {
+        fabric_metadata.next_id = next_id;
+        acl_counter.count();
     }
 
-#ifdef WITH_MULTICAST
-    direct_counter(CounterType.packets_and_bytes) multicast_v6_counter;
-
-    table multicast_v6 {
-        key = {
-            hdr.vlan_tag.vlan_id: exact;
-            hdr.ipv6.dst_addr: lpm;
-        }
-
-        actions = {
-            set_next_id;
-        }
-        counters = multicast_v6_counter;
+    // Send immendiatelly to CPU - skip the rest of pipeline.
+    action punt_to_cpu() {
+        standard_metadata.egress_spec = CPU_PORT;
+        acl_counter.count();
+        exit;
     }
-#endif // WITH_MULTICAST
-#endif // WITH_IPV6
+
+    action clone_to_cpu() {
+        // FIXME: works only if pkt will be replicated via PRE multicast group.
+        fabric_metadata.clone_to_cpu = _TRUE;
+        acl_counter.count();
+    }
+
+    action drop() {
+        mark_to_drop();
+        acl_counter.count();
+    }
+
+    action nop_acl() {
+        acl_counter.count();
+    }
 
     table acl {
         key = {
@@ -136,11 +139,11 @@ control Forwarding (
             fabric_metadata.ip_proto: ternary; // 8
             fabric_metadata.l4_src_port: ternary; // 16
             fabric_metadata.l4_dst_port: ternary; // 16
-            fabric_metadata.original_ether_type: ternary; //16
 
             hdr.ethernet.dst_addr: ternary; // 48
             hdr.ethernet.src_addr: ternary; // 48
             hdr.vlan_tag.vlan_id: ternary; // 12
+            hdr.vlan_tag.ether_type: ternary; //16
             hdr.ipv4.src_addr: ternary; // 32
             hdr.ipv4.dst_addr: ternary; // 32
             hdr.icmp.icmp_type: ternary; // 8
@@ -148,16 +151,41 @@ control Forwarding (
         }
 
         actions = {
-            set_next_id;
-            duplicate_to_controller;
+            set_next_id_acl;
+            punt_to_cpu;
+            clone_to_cpu;
             drop;
-            nop;
+            nop_acl;
         }
 
-        const default_action = nop();
-        size = 256;
+        const default_action = nop_acl();
+        size = 128;
         counters = acl_counter;
     }
+
+#ifdef WITH_IPV6
+    /*
+     * IPv6 Routing Table.
+     * Matches IPv6 prefix and make egress decision.
+     */
+    direct_counter(CounterType.packets_and_bytes) routing_v6_counter;
+
+    action set_next_id_routing_v6(next_id_t next_id) {
+        fabric_metadata.next_id = next_id;
+        routing_v6_counter.count();
+    }
+
+    table routing_v6 {
+        key = {
+            hdr.ipv6.dst_addr: lpm;
+        }
+
+        actions = {
+            set_next_id_routing_v6;
+        }
+        counters = routing_v6_counter;
+    }
+#endif // WITH_IPV6
 
     apply {
         if(fabric_metadata.fwd_type == FWD_BRIDGING) bridging.apply();
@@ -166,17 +194,10 @@ control Forwarding (
 
             // TODO: IPv6
             hdr.vlan_tag.ether_type = ETHERTYPE_IPV4;
-            fabric_metadata.original_ether_type = ETHERTYPE_IPV4;
         }
-        else if (fabric_metadata.fwd_type == FWD_IPV4_UNICAST) unicast_v4.apply();
-#ifdef WITH_MULTICAST
-        else if (fabric_metadata.fwd_type == FWD_IPV4_MULTICAST) multicast_v4.apply();
-#endif // WITH_MULTICAST
+        else if (fabric_metadata.fwd_type == FWD_IPV4_UNICAST) routing_v4.apply();
 #ifdef WITH_IPV6
-        else if (fabric_metadata.fwd_type == FWD_IPV6_UNICAST) unicast_v6.apply();
-#ifdef WITH_MULTICAST
-        else if (fabric_metadata.fwd_type == FWD_IPV6_MULTICAST) multicast_v6.apply();
-#endif // WITH_MULTICAST
+        else if (fabric_metadata.fwd_type == FWD_IPV6_UNICAST) routing_v6.apply();
 #endif // WITH_IPV6
         acl.apply();
     }

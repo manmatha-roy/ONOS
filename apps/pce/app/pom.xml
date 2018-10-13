@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.onosproject</groupId>
         <artifactId>onos-apps-pce</artifactId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
     <artifactId>onos-apps-pce-app</artifactId>
     <packaging>bundle</packaging>
@@ -112,8 +112,15 @@
        </dependency>
        <dependency>
            <groupId>org.onosproject</groupId>
-           <artifactId>onos-app-bandwidthmgmt</artifactId>
+           <artifactId>onos-apps-pce-bandwidthmgmt</artifactId>
            <version>${project.version}</version>
+       </dependency>
+       <dependency>
+           <groupId>org.onosproject</groupId>
+           <artifactId>onos-incubator-api</artifactId>
+           <classifier>tests</classifier>
+           <version>${project.version}</version>
+           <scope>test</scope>
        </dependency>
    </dependencies>
 </project>

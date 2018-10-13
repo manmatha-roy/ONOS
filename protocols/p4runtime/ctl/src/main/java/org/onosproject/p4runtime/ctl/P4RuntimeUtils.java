@@ -17,13 +17,14 @@
 package org.onosproject.p4runtime.ctl;
 
 import com.google.protobuf.ByteString;
+import p4.v1.P4RuntimeOuterClass;
 
 import static java.lang.String.format;
 
 /**
  * Utilities for P4 runtime control.
  */
-public final class P4RuntimeUtils {
+final class P4RuntimeUtils {
 
     private P4RuntimeUtils() {
         // Hide default construction
@@ -47,5 +48,9 @@ public final class P4RuntimeUtils {
                     "wrong prefix length for %s, field size is %d bits, but found one is %d",
                     entityDescr, bitWidth, prefixLength));
         }
+    }
+
+    static P4RuntimeOuterClass.Index indexMsg(long index) {
+        return P4RuntimeOuterClass.Index.newBuilder().setIndex(index).build();
     }
 }

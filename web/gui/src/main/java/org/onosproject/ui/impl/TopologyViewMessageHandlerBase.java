@@ -29,7 +29,6 @@ import org.onosproject.cluster.NodeId;
 import org.onosproject.core.CoreService;
 import org.onosproject.incubator.net.tunnel.OpticalTunnelEndPoint;
 import org.onosproject.incubator.net.tunnel.Tunnel;
-import org.onosproject.net.Annotated;
 import org.onosproject.net.AnnotationKeys;
 import org.onosproject.net.Annotations;
 import org.onosproject.net.ConnectPoint;
@@ -42,8 +41,12 @@ import org.onosproject.net.Host;
 import org.onosproject.net.HostId;
 import org.onosproject.net.HostLocation;
 import org.onosproject.net.Link;
+import org.onosproject.net.config.NetworkConfigService;
+import org.onosproject.net.config.basics.BasicDeviceConfig;
+import org.onosproject.net.config.basics.BasicElementConfig;
+import org.onosproject.net.config.basics.BasicHostConfig;
 import org.onosproject.net.device.DeviceEvent;
-import org.onosproject.net.flow.FlowEntry;
+import org.onosproject.net.driver.Driver;
 import org.onosproject.net.host.HostEvent;
 import org.onosproject.net.link.LinkEvent;
 import org.onosproject.net.provider.ProviderId;
@@ -61,36 +64,18 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static org.onosproject.net.AnnotationKeys.DRIVER;
 import static org.onosproject.net.PortNumber.portNumber;
+import static org.onosproject.net.config.basics.BasicElementConfig.LOC_TYPE_GEO;
+import static org.onosproject.net.config.basics.BasicElementConfig.LOC_TYPE_GRID;
 import static org.onosproject.ui.topo.TopoConstants.CoreButtons;
-import static org.onosproject.ui.topo.TopoConstants.Properties.DEVICES;
-import static org.onosproject.ui.topo.TopoConstants.Properties.FLOWS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.GRID_X;
-import static org.onosproject.ui.topo.TopoConstants.Properties.GRID_Y;
-import static org.onosproject.ui.topo.TopoConstants.Properties.HOSTS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.HW_VERSION;
-import static org.onosproject.ui.topo.TopoConstants.Properties.INTENTS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.IP;
-import static org.onosproject.ui.topo.TopoConstants.Properties.LATITUDE;
-import static org.onosproject.ui.topo.TopoConstants.Properties.LINKS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.LONGITUDE;
-import static org.onosproject.ui.topo.TopoConstants.Properties.MAC;
-import static org.onosproject.ui.topo.TopoConstants.Properties.PORTS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.PROTOCOL;
-import static org.onosproject.ui.topo.TopoConstants.Properties.SERIAL_NUMBER;
-import static org.onosproject.ui.topo.TopoConstants.Properties.SW_VERSION;
-import static org.onosproject.ui.topo.TopoConstants.Properties.TOPOLOGY_SSCS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.TUNNELS;
-import static org.onosproject.ui.topo.TopoConstants.Properties.URI;
-import static org.onosproject.ui.topo.TopoConstants.Properties.VENDOR;
-import static org.onosproject.ui.topo.TopoConstants.Properties.VERSION;
-import static org.onosproject.ui.topo.TopoConstants.Properties.VLAN;
-import static org.onosproject.ui.topo.TopoConstants.Properties.VLAN_NONE;
+import static org.onosproject.ui.topo.TopoConstants.Properties.*;
 import static org.onosproject.ui.topo.TopoUtils.compactLinkString;
 
 /**
@@ -173,6 +158,7 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
         DEVICE_GLYPHS.put(Device.Type.ONU, "m_onu");
         DEVICE_GLYPHS.put(Device.Type.OPTICAL_AMPLIFIER, "unknown"); // TODO glyph needed
         DEVICE_GLYPHS.put(Device.Type.OTHER, "m_other");
+        DEVICE_GLYPHS.put(Device.Type.SERVER, "m_endpoint");
     }
 
     private static final String DEFAULT_HOST_GLYPH = "m_endstation";
@@ -195,6 +181,13 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
      */
     static Map<String, ObjectNode> getMetaUi() {
         return Collections.unmodifiableMap(metaUi);
+    }
+
+    /**
+     * Clears any meta-ui information.
+     */
+    public static void clearMetaUi() {
+        metaUi.clear();
     }
 
     private static final String LION_TOPO = "core.view.Topo";
@@ -295,8 +288,13 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
     protected ObjectNode deviceMessage(DeviceEvent event) {
         Device device = event.subject();
         String uiType = device.annotations().value(AnnotationKeys.UI_TYPE);
+        String driverName = device.annotations().value(DRIVER);
+        Driver driver = driverName == null ? null : services.driver().getDriver(driverName);
         String devType = uiType != null ? uiType :
-                device.type().toString().toLowerCase();
+                (driver != null ? driver.getProperty(AnnotationKeys.UI_TYPE) : null);
+        if (devType == null) {
+            devType = device.type().toString().toLowerCase();
+        }
         String name = device.annotations().value(AnnotationKeys.NAME);
         name = isNullOrEmpty(name) ? device.id().toString() : name;
 
@@ -308,8 +306,12 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
 
         payload.set("labels", labels("", name, device.id().toString()));
         payload.set("props", props(device.annotations()));
-        addGeoLocation(device, payload);
-        addMetaUi(device.id().toString(), payload);
+
+        BasicDeviceConfig cfg = get(NetworkConfigService.class)
+                .getConfig(device.id(), BasicDeviceConfig.class);
+        if (!addLocation(cfg, payload)) {
+            addMetaUi(device.id().toString(), payload);
+        }
 
         String type = DEVICE_EVENT.get(event.type());
         return JsonUtils.envelope(type, payload);
@@ -354,8 +356,12 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
 
         payload.set("labels", labels(nameForHost(host), ip, host.mac().toString(), ""));
         payload.set("props", props(host.annotations()));
-        addGeoLocation(host, payload);
-        addMetaUi(host.id().toString(), payload);
+
+        BasicHostConfig cfg = get(NetworkConfigService.class)
+                .getConfig(host.id(), BasicHostConfig.class);
+        if (!addLocation(cfg, payload)) {
+            addMetaUi(host.id().toString(), payload);
+        }
 
         String type = HOST_EVENT.get(event.type());
         return JsonUtils.envelope(type, payload);
@@ -403,30 +409,25 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
         }
     }
 
-    // Adds a geo location JSON to the specified payload object.
-    private void addGeoLocation(Annotated annotated, ObjectNode payload) {
-        Annotations annotations = annotated.annotations();
-        if (annotations == null) {
-            return;
-        }
-
-        String slat = annotations.value(AnnotationKeys.LATITUDE);
-        String slng = annotations.value(AnnotationKeys.LONGITUDE);
-        boolean validLat = slat != null && !slat.equals(NO_GEO_VALUE);
-        boolean validLng = slng != null && !slng.equals(NO_GEO_VALUE);
-        if (validLat && validLng) {
-            try {
-                double lat = Double.parseDouble(slat);
-                double lng = Double.parseDouble(slng);
-                ObjectNode loc = objectNode()
-                        .put("locType", "geo")
-                        .put("latOrY", lat)
-                        .put("longOrX", lng);
-                payload.set("location", loc);
-            } catch (NumberFormatException e) {
-                log.warn("Invalid geo data: latitude={}, longitude={}", slat, slng);
+    private boolean addLocation(BasicElementConfig cfg, ObjectNode payload) {
+        if (cfg != null) {
+            String locType = cfg.locType();
+            boolean isGeo = Objects.equals(locType, LOC_TYPE_GEO);
+            boolean isGrid = Objects.equals(locType, LOC_TYPE_GRID);
+            if (isGeo || isGrid) {
+                try {
+                    ObjectNode loc = objectNode()
+                            .put("locType", locType)
+                            .put("latOrY", isGeo ? cfg.latitude() : cfg.gridY())
+                            .put("longOrX", isGeo ? cfg.longitude() : cfg.gridX());
+                    payload.set("location", loc);
+                    return true;
+                } catch (NumberFormatException e) {
+                    log.warn("Invalid location data: {}", cfg);
+                }
             }
         }
+        return false;
     }
 
     // Updates meta UI information for the specified object.
@@ -544,11 +545,7 @@ public abstract class TopologyViewMessageHandlerBase extends UiMessageHandler {
     }
 
     protected int getFlowCount(DeviceId deviceId) {
-        int count = 0;
-        for (FlowEntry flowEntry : services.flow().getFlowEntries(deviceId)) {
-            count++;
-        }
-        return count;
+        return services.flow().getFlowRuleCount(deviceId);
     }
 
     protected int getTunnelCount(DeviceId deviceId) {

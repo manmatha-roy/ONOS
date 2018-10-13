@@ -53,6 +53,14 @@
         </command>
 
         <command>
+            <action class="org.onosproject.cli.net.FlowObjectiveQueueListCommand"/>
+        </command>
+
+        <command>
+            <action class="org.onosproject.cli.net.FlowObjectiveQueueClearCommand"/>
+        </command>
+
+        <command>
             <action class="org.onosproject.cli.net.FlowObjectiveCompositionCommand"/>
         </command>
 
@@ -293,6 +301,12 @@
 
         <command>
             <action class="org.onosproject.cli.net.IntentsListCommand"/>
+        </command>
+        <command>
+            <action class="org.onosproject.cli.net.IntentsDiagnosisCommand"/>
+            <completers>
+                <ref component-id="intentKeyCompleter"/>
+            </completers>
         </command>
         <command>
             <action class="org.onosproject.cli.net.IntentListCompilers"/>
@@ -939,6 +953,7 @@
     <bean id="nodeIdCompleter" class="org.onosproject.cli.NodeIdCompleter"/>
     <bean id="deviceIdCompleter" class="org.onosproject.cli.net.DeviceIdCompleter"/>
     <bean id="portNumberCompleter" class="org.onosproject.cli.net.PortNumberCompleter"/>
+    <bean id="numericPortNumberCompleter" class="org.onosproject.cli.net.completer.NumericPortNumberCompleter" />
     <bean id="portStateCompleter" class="org.onosproject.cli.net.PortStateCompleter"/>
     <bean id="clusterIdCompleter" class="org.onosproject.cli.net.ClusterIdCompleter"/>
     <bean id="roleCompleter" class="org.onosproject.cli.net.RoleCompleter"/>

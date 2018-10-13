@@ -89,8 +89,6 @@ import static org.onosproject.security.AppPermission.Type.FLOWRULE_READ;
 import static org.onosproject.security.AppPermission.Type.FLOWRULE_WRITE;
 import static org.slf4j.LoggerFactory.getLogger;
 
-
-
 /**
  * Provides implementation of the flow NB &amp; SB APIs.
  */
@@ -103,7 +101,8 @@ public class FlowRuleManager
 
     private final Logger log = getLogger(getClass());
 
-    public static final String FLOW_RULE_NULL = "FlowRule cannot be null";
+    private static final String DEVICE_ID_NULL = "Device ID cannot be null";
+    private static final String FLOW_RULE_NULL = "FlowRule cannot be null";
     private static final boolean ALLOW_EXTRANEOUS_RULES = false;
 
     @Property(name = "allowExtraneousRules", boolValue = ALLOW_EXTRANEOUS_RULES,
@@ -219,10 +218,20 @@ public class FlowRuleManager
         }
 
         String s = get(properties, "fallbackFlowPollFrequency");
-        try {
-            fallbackFlowPollFrequency = isNullOrEmpty(s) ? DEFAULT_POLL_FREQUENCY : Integer.parseInt(s);
-        } catch (NumberFormatException e) {
-            fallbackFlowPollFrequency = DEFAULT_POLL_FREQUENCY;
+        if (isNullOrEmpty(s)) {
+            log.info("fallbackFlowPollFrequency is not configured, " +
+                             "using current value of {} seconds",
+                     fallbackFlowPollFrequency);
+        } else {
+            try {
+                fallbackFlowPollFrequency = Integer.parseInt(s);
+                log.info("Configured. FallbackFlowPollFrequency is {} seconds",
+                         fallbackFlowPollFrequency);
+            } catch (NumberFormatException e) {
+                log.warn("Configured fallbackFlowPollFrequency value '{}' " +
+                                 "is not a number, using current value of {} seconds",
+                         fallbackFlowPollFrequency);
+            }
         }
     }
 
@@ -233,8 +242,16 @@ public class FlowRuleManager
     }
 
     @Override
+    public int getFlowRuleCount(DeviceId deviceId) {
+        checkPermission(FLOWRULE_READ);
+        checkNotNull(deviceId, DEVICE_ID_NULL);
+        return store.getFlowRuleCount(deviceId);
+    }
+
+    @Override
     public Iterable<FlowEntry> getFlowEntries(DeviceId deviceId) {
         checkPermission(FLOWRULE_READ);
+        checkNotNull(deviceId, DEVICE_ID_NULL);
         return store.getFlowEntries(deviceId);
     }
 
@@ -252,6 +269,7 @@ public class FlowRuleManager
     @Override
     public void purgeFlowRules(DeviceId deviceId) {
         checkPermission(FLOWRULE_WRITE);
+        checkNotNull(deviceId, DEVICE_ID_NULL);
         store.purgeFlowRule(deviceId);
     }
 
@@ -343,6 +361,7 @@ public class FlowRuleManager
      */
     @Override
     protected synchronized FlowRuleProvider getProvider(DeviceId deviceId) {
+        checkNotNull(deviceId, DEVICE_ID_NULL);
         // if device supports FlowRuleProgrammable,
         // use FlowRuleProgrammable via FlowRuleDriverProvider
         return Optional.ofNullable(deviceService.getDevice(deviceId))
@@ -714,11 +733,13 @@ public class FlowRuleManager
     @Override
     public Iterable<TableStatisticsEntry> getFlowTableStatistics(DeviceId deviceId) {
         checkPermission(FLOWRULE_READ);
+        checkNotNull(deviceId, DEVICE_ID_NULL);
         return store.getTableStatistics(deviceId);
     }
 
     @Override
     public long getActiveFlowRuleCount(DeviceId deviceId) {
+        checkNotNull(deviceId, DEVICE_ID_NULL);
         return store.getActiveFlowRuleCount(deviceId);
     }
 

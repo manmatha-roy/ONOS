@@ -87,7 +87,7 @@ public class DistributedLeadershipStore
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected UpgradeService upgradeService;
 
-    private static final long DEFAULT_ELECTION_TIMEOUT_MILLIS = 250;
+    private static final long DEFAULT_ELECTION_TIMEOUT_MILLIS = 2500;
     @Property(name = "electionTimeoutMillis", longValue = DEFAULT_ELECTION_TIMEOUT_MILLIS,
             label = "the leader election timeout in milliseconds")
     private long electionTimeoutMillis = DEFAULT_ELECTION_TIMEOUT_MILLIS;
@@ -202,6 +202,7 @@ public class DistributedLeadershipStore
             leaderElector = storageService.leaderElectorBuilder()
                     .withName("onos-leadership-elections")
                     .withElectionTimeout(electionTimeoutMillis)
+                    .withRelaxedReadConsistency()
                     .build()
                     .asLeaderElector();
         }

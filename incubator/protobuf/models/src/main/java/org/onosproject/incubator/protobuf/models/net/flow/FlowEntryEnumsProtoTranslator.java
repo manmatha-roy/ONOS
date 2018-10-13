@@ -25,7 +25,7 @@ import java.util.Optional;
 
 
 /**
- * gRPC FlowEntryEnumsProto message to equivalant ONOS FlowRule enums conversion related utilities.
+ * gRPC FlowEntryEnumsProto message to equivalent ONOS FlowEntry enums conversion related utilities.
  */
 public final class FlowEntryEnumsProtoTranslator {
 
@@ -63,7 +63,7 @@ public final class FlowEntryEnumsProtoTranslator {
      * @param flowEntryState gRPC message
      * @return {@link FlowEntryState}
      */
-    public static Optional<Object> translate(FlowEntryEnumsProto.FlowEntryStateProto flowEntryState) {
+    public static Optional<FlowEntryState> translate(FlowEntryEnumsProto.FlowEntryStateProto flowEntryState) {
 
         switch (flowEntryState) {
             case PENDING_ADD:
@@ -115,7 +115,7 @@ public final class FlowEntryEnumsProtoTranslator {
      * @param flowLiveType gRPC message
      * @return {@link FlowLiveType}
      */
-    public static Optional<Object> translate(FlowEntryEnumsProto.FlowLiveTypeProto flowLiveType) {
+    public static Optional<FlowLiveType> translate(FlowEntryEnumsProto.FlowLiveTypeProto flowLiveType) {
 
         switch (flowLiveType) {
             case IMMEDIATE:

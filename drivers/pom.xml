@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.onosproject</groupId>
         <artifactId>onos</artifactId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>onos-drivers-general</artifactId>
@@ -32,15 +32,17 @@
 
     <modules>
         <module>default</module>
-        <module>ciena</module>
+        <module>ciena/waveserver</module>
+        <module>ciena/c5162</module>
+        <module>ciena/c5170</module>
+        <module>ciena/waveserverai</module>
         <module>fujitsu</module>
         <module>cisco</module>
         <module>netconf</module>
+        <module>server</module>
         <module>ovsdb</module>
         <module>utilities</module>
         <module>lumentum</module>
-        <!-- TODO ONOS-5554 excluding from the build -->
-        <!--<module>bti</module>-->
         <module>corsa</module>
         <module>optical</module>
         <module>arista</module>
@@ -48,9 +50,12 @@
         <module>lisp</module>
         <module>flowspec</module>
         <module>oplink</module>
-        <!-- <module>bmv2</module> -->
+        <module>p4runtime</module>
+        <module>bmv2</module>
         <module>hp</module>
-        <module>microsemi</module>
+        <module>microsemi/ea1000</module>
+        <module>gnmi</module>
+        <module>odtn-driver</module>
     </modules>
 
     <!--<properties>

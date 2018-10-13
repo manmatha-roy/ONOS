@@ -22,6 +22,7 @@ import org.onlab.packet.MplsLabel;
 import org.onlab.packet.VlanId;
 import org.onlab.util.ImmutableByteSequence;
 import org.onosproject.net.PortNumber;
+import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficTreatment;
 import org.onosproject.net.flow.instructions.Instruction;
 import org.onosproject.net.flow.instructions.Instructions;
@@ -30,8 +31,10 @@ import org.onosproject.net.flow.instructions.L2ModificationInstruction;
 import org.onosproject.net.flow.instructions.L2ModificationInstruction.ModEtherInstruction;
 import org.onosproject.net.flow.instructions.L2ModificationInstruction.ModMplsLabelInstruction;
 import org.onosproject.net.flow.instructions.L2ModificationInstruction.ModVlanIdInstruction;
+import org.onosproject.net.flow.instructions.L3ModificationInstruction;
 import org.onosproject.net.pi.model.PiActionId;
 import org.onosproject.net.pi.model.PiPipelineInterpreter.PiInterpreterException;
+import org.onosproject.net.pi.model.PiTableId;
 import org.onosproject.net.pi.runtime.PiAction;
 import org.onosproject.net.pi.runtime.PiActionParam;
 import org.slf4j.Logger;
@@ -40,15 +43,27 @@ import java.util.List;
 
 import static java.lang.String.format;
 import static org.onosproject.net.flow.instructions.Instruction.Type.L2MODIFICATION;
-import static org.onosproject.net.flow.instructions.Instruction.Type.OUTPUT;
 import static org.onosproject.net.flow.instructions.L2ModificationInstruction.L2SubType.VLAN_ID;
 import static org.onosproject.net.flow.instructions.L2ModificationInstruction.L2SubType.VLAN_PUSH;
+import static org.onosproject.pipelines.fabric.FabricUtils.getOutputPort;
 import static org.slf4j.LoggerFactory.getLogger;
 
 
 final class FabricTreatmentInterpreter {
     private static final Logger log = getLogger(FabricTreatmentInterpreter.class);
-    private static final String INVALID_TREATMENT = "Invalid treatment for %s block: %s";
+    private static final String INVALID_TREATMENT = "Invalid treatment for %s block [%s]";
+    private static final String INVALID_TREATMENT_WITH_EXP = "Invalid treatment for %s block: %s [%s]";
+    private static final PiAction NOP = PiAction.builder().withId(FabricConstants.NOP).build();
+    private static final PiAction NOP_INGRESS_PORT_VLAN = PiAction.builder()
+            .withId(FabricConstants.FABRIC_INGRESS_FILTERING_NOP_INGRESS_PORT_VLAN).build();
+    private static final PiAction NOP_ACL = PiAction.builder()
+            .withId(FabricConstants.FABRIC_INGRESS_FORWARDING_NOP_ACL).build();
+    private static final PiAction NOP_ROUTING_V4 = PiAction.builder()
+            .withId(FabricConstants.FABRIC_INGRESS_FORWARDING_NOP_ROUTING_V4).build();
+
+    private static final PiAction POP_VLAN = PiAction.builder()
+            .withId(FabricConstants.FABRIC_EGRESS_EGRESS_NEXT_POP_VLAN)
+            .build();
 
     // Hide default constructor
     protected FabricTreatmentInterpreter() {
@@ -56,24 +71,22 @@ final class FabricTreatmentInterpreter {
 
     /*
      * In Filtering block, we need to implement these actions:
-     *
      * push_internal_vlan
      * set_vlan
      * nop
      *
      * Unsupported, using PiAction directly:
      * set_forwarding_type
+     * drop
      */
 
-    static PiAction mapFilteringTreatment(TrafficTreatment treatment)
+    static PiAction mapFilteringTreatment(TrafficTreatment treatment, PiTableId tableId)
             throws PiInterpreterException {
         List<Instruction> instructions = treatment.allInstructions();
         Instruction noActInst = Instructions.createNoAction();
         if (instructions.isEmpty() || instructions.contains(noActInst)) {
             // nop
-            return PiAction.builder()
-                    .withId(FabricConstants.ACT_NOP_ID)
-                    .build();
+            return NOP_INGRESS_PORT_VLAN;
         }
 
         L2ModificationInstruction.ModVlanHeaderInstruction pushVlanInst = null;
@@ -97,14 +110,14 @@ final class FabricTreatmentInterpreter {
         }
 
         VlanId vlanId = setVlanInst.vlanId();
-        PiActionParam param = new PiActionParam(FabricConstants.ACT_PRM_NEW_VLAN_ID_ID,
+        PiActionParam param = new PiActionParam(FabricConstants.NEW_VLAN_ID,
                                                 ImmutableByteSequence.copyFrom(vlanId.toShort()));
         PiActionId actionId;
         if (pushVlanInst != null) {
             // push_internal_vlan
-            actionId = FabricConstants.ACT_FILTERING_PUSH_INTERNAL_VLAN_ID;
+            actionId = FabricConstants.FABRIC_INGRESS_FILTERING_PUSH_INTERNAL_VLAN;
         } else {
-            actionId = FabricConstants.ACT_FILTERING_SET_VLAN_ID;
+            actionId = FabricConstants.FABRIC_INGRESS_FILTERING_SET_VLAN;
         }
 
         // set_vlan
@@ -116,55 +129,74 @@ final class FabricTreatmentInterpreter {
 
     /*
      * In forwarding block, we need to implement these actions:
-     * duplicate_to_controller
+     * send_to_controller
      *
      * Unsupported, using PiAction directly:
-     * set_next_id
-     * push_mpls_and_next_v4
-     * push_mpls_and_next_v6
+     * set_next_id_bridging
+     * pop_mpls_and_next
+     * set_next_id_unicast_v4
+     * set_next_id_multicast_v4
+     * set_next_id_acl
+     * drop
+     * set_next_id_unicast_v6
+     * set_next_id_multicast_v6
      */
 
-    public static PiAction mapForwardingTreatment(TrafficTreatment treatment)
+    public static PiAction mapForwardingTreatment(TrafficTreatment treatment, PiTableId tableId)
             throws PiInterpreterException {
-        List<Instruction> insts = treatment.allInstructions();
-        OutputInstruction outInst = insts.stream()
-                .filter(inst -> inst.type() == OUTPUT)
-                .map(inst -> (OutputInstruction) inst)
-                .findFirst()
-                .orElse(null);
-
-        if (outInst == null) {
-            throw new PiInterpreterException(format(INVALID_TREATMENT, "forwarding", treatment));
+        // Empty treatment, generate table entry with no action
+        if (treatment.equals(DefaultTrafficTreatment.emptyTreatment()) ||
+                treatment.allInstructions().isEmpty()) {
+            if (tableId.equals(FabricConstants.FABRIC_INGRESS_FORWARDING_ACL)) {
+                return NOP_ACL;
+            } else if (tableId.equals(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4)) {
+                return NOP_ROUTING_V4;
+            } else {
+                return NOP;
+            }
+        }
+        PortNumber outPort = getOutputPort(treatment);
+        if (outPort == null
+                || !outPort.equals(PortNumber.CONTROLLER)
+                || treatment.allInstructions().size() > 1) {
+            throw new PiInterpreterException(
+                    format(INVALID_TREATMENT_WITH_EXP,
+                           "forwarding", "supports only punt/clone to CPU actions",
+                           treatment));
         }
 
-        PortNumber portNumber = outInst.port();
-        if (!portNumber.equals(PortNumber.CONTROLLER)) {
-            throw new PiInterpreterException(format("Unsupported port number %s," +
-                                                            "supports punt action only",
-                                                    portNumber));
-        }
+        final PiActionId actionId = treatment.clearedDeferred()
+                ? FabricConstants.FABRIC_INGRESS_FORWARDING_PUNT_TO_CPU
+                : FabricConstants.FABRIC_INGRESS_FORWARDING_CLONE_TO_CPU;
 
         return PiAction.builder()
-                .withId(FabricConstants.ACT_FORWARDING_DUPLICATE_TO_CONTROLLER_ID)
+                .withId(actionId)
                 .build();
     }
 
     /*
      * In Next block, we need to implement these actions:
-     * output
+     * set_vlan
      * set_vlan_output
-     * l3_routing
-     * mpls_routing_v4
-     *
-     * Unsupported, using PiAction directly:
-     * set_next_type
+     * output_simple
+     * output_hashed
+     * l3_routing_simple
+     * l3_routing_vlan
+     * l3_routing_hashed
+     * mpls_routing_v4_simple
+     * mpls_routing_v6_simple
+     * mpls_routing_v4_hashed
+     * mpls_routing_v6_hashed
      *
      * Unsupported, need to find a way to implement it
-     * mpls_routing_v6
+     *
+     * set_mcast_group
+     *
      */
 
-    public static PiAction mapNextTreatment(TrafficTreatment treatment)
+    public static PiAction mapNextTreatment(TrafficTreatment treatment, PiTableId tableId)
             throws PiInterpreterException {
+        // TODO: refactor this method
         List<Instruction> insts = treatment.allInstructions();
         OutputInstruction outInst = null;
         ModEtherInstruction modEthDstInst = null;
@@ -190,10 +222,27 @@ final class FabricTreatmentInterpreter {
                         case MPLS_LABEL:
                             modMplsInst = (ModMplsLabelInstruction) l2Inst;
                             break;
-                        case VLAN_PUSH:
+                        case VLAN_POP:
+                            // VLAN_POP will be handled by mapEgressNextTreatment()
+                            break;
+                        case MPLS_PUSH:
+                            // Ignore. fabric.p4 only needs MPLS_LABEL to push a label
                             break;
                         default:
-                            log.warn("Unsupported l2 instruction sub type: {}", l2Inst.subtype());
+                            log.warn("Unsupported l2 instruction sub type {} [table={}, {}]",
+                                     l2Inst.subtype(), tableId, treatment);
+                            break;
+                    }
+                    break;
+                case L3MODIFICATION:
+                    L3ModificationInstruction l3Inst = (L3ModificationInstruction) inst;
+                    switch (l3Inst.subtype()) {
+                        case TTL_OUT:
+                            // Ignore TTL_OUT
+                            break;
+                        default:
+                            log.warn("Unsupported l3 instruction sub type {} [table={}, {}]",
+                                    l3Inst.subtype(), tableId, treatment);
                             break;
                     }
                     break;
@@ -201,32 +250,47 @@ final class FabricTreatmentInterpreter {
                     outInst = (OutputInstruction) inst;
                     break;
                 default:
-                    log.warn("Unsupported instruction sub type: {}", inst.type());
+                    log.warn("Unsupported instruction sub type {} [table={}, {}]",
+                             inst.type(), tableId, treatment);
                     break;
             }
+        }
+
+        if (tableId.equals(FabricConstants.FABRIC_INGRESS_NEXT_VLAN_META) &&
+                modVlanIdInst != null) {
+            // set_vlan
+            VlanId vlanId = modVlanIdInst.vlanId();
+            PiActionParam newVlanParam =
+                    new PiActionParam(FabricConstants.NEW_VLAN_ID,
+                                      ImmutableByteSequence.copyFrom(vlanId.toShort()));
+            return PiAction.builder()
+                    .withId(FabricConstants.FABRIC_INGRESS_NEXT_SET_VLAN)
+                    .withParameter(newVlanParam)
+                    .build();
         }
 
         if (outInst == null) {
             throw new PiInterpreterException(format(INVALID_TREATMENT, "next", treatment));
         }
+
         short portNum = (short) outInst.port().toLong();
-        PiActionParam portNumParam = new PiActionParam(FabricConstants.ACT_PRM_PORT_NUM_ID,
+        PiActionParam portNumParam = new PiActionParam(FabricConstants.PORT_NUM,
                                                        ImmutableByteSequence.copyFrom(portNum));
         if (modEthDstInst == null && modEthSrcInst == null) {
             if (modVlanIdInst != null) {
                 VlanId vlanId = modVlanIdInst.vlanId();
                 PiActionParam vlanParam =
-                        new PiActionParam(FabricConstants.ACT_PRM_NEW_VLAN_ID_ID,
+                        new PiActionParam(FabricConstants.NEW_VLAN_ID,
                                           ImmutableByteSequence.copyFrom(vlanId.toShort()));
-                // set_vlan_output
+                // set_vlan_output (simple table)
                 return PiAction.builder()
-                        .withId(FabricConstants.ACT_NEXT_SET_VLAN_OUTPUT_ID)
+                        .withId(FabricConstants.FABRIC_INGRESS_NEXT_SET_VLAN_OUTPUT)
                         .withParameters(ImmutableList.of(portNumParam, vlanParam))
                         .build();
             } else {
-                // output
+                // output (simple or hashed table)
                 return PiAction.builder()
-                        .withId(FabricConstants.ACT_NEXT_OUTPUT_ID)
+                        .withId(FabricConstants.FABRIC_INGRESS_NEXT_OUTPUT_SIMPLE)
                         .withParameter(portNumParam)
                         .build();
             }
@@ -235,9 +299,9 @@ final class FabricTreatmentInterpreter {
         if (modEthDstInst != null && modEthSrcInst != null) {
             MacAddress srcMac = modEthSrcInst.mac();
             MacAddress dstMac = modEthDstInst.mac();
-            PiActionParam srcMacParam = new PiActionParam(FabricConstants.ACT_PRM_SMAC_ID,
+            PiActionParam srcMacParam = new PiActionParam(FabricConstants.SMAC,
                                                           ImmutableByteSequence.copyFrom(srcMac.toBytes()));
-            PiActionParam dstMacParam = new PiActionParam(FabricConstants.ACT_PRM_DMAC_ID,
+            PiActionParam dstMacParam = new PiActionParam(FabricConstants.DMAC,
                                                           ImmutableByteSequence.copyFrom(dstMac.toBytes()));
 
             if (modMplsInst != null) {
@@ -245,11 +309,21 @@ final class FabricTreatmentInterpreter {
                 MplsLabel mplsLabel = modMplsInst.label();
                 try {
                     ImmutableByteSequence mplsValue =
-                            ImmutableByteSequence.fit(ImmutableByteSequence.copyFrom(mplsLabel.toInt()), 20);
-                    PiActionParam mplsParam = new PiActionParam(FabricConstants.ACT_PRM_LABEL_ID, mplsValue);
+                            ImmutableByteSequence.copyFrom(mplsLabel.toInt()).fit(20);
+                    PiActionParam mplsParam = new PiActionParam(FabricConstants.LABEL, mplsValue);
+
+                    PiActionId actionId;
+                    // FIXME: finds a way to determine v4 or v6
+                    if (tableId.equals(FabricConstants.FABRIC_INGRESS_NEXT_SIMPLE)) {
+                        actionId = FabricConstants.FABRIC_INGRESS_NEXT_MPLS_ROUTING_V4_SIMPLE;
+                    } else if (tableId.equals(FabricConstants.FABRIC_INGRESS_NEXT_HASHED)) {
+                        actionId = FabricConstants.FABRIC_INGRESS_NEXT_MPLS_ROUTING_V4_HASHED;
+                    } else {
+                        throw new PiInterpreterException(format(INVALID_TREATMENT, "next", treatment));
+                    }
+
                     return PiAction.builder()
-                            // FIXME: fins a way to determine v4 or v6
-                            .withId(FabricConstants.ACT_NEXT_MPLS_ROUTING_V4_ID)
+                            .withId(actionId)
                             .withParameters(ImmutableList.of(portNumParam,
                                                              srcMacParam,
                                                              dstMacParam,
@@ -262,15 +336,51 @@ final class FabricTreatmentInterpreter {
                 }
             }
 
-            // L3 routing
-            return PiAction.builder()
-                    .withId(FabricConstants.ACT_NEXT_L3_ROUTING_ID)
-                    .withParameters(ImmutableList.of(portNumParam,
-                                                     srcMacParam,
-                                                     dstMacParam))
-                    .build();
+            if (modVlanIdInst != null) {
+                VlanId vlanId = modVlanIdInst.vlanId();
+                PiActionParam vlanParam =
+                        new PiActionParam(FabricConstants.NEW_VLAN_ID,
+                                          ImmutableByteSequence.copyFrom(vlanId.toShort()));
+                // L3 routing and set VLAN
+                return PiAction.builder()
+                        .withId(FabricConstants.FABRIC_INGRESS_NEXT_L3_ROUTING_VLAN)
+                        .withParameters(ImmutableList.of(srcMacParam, dstMacParam, portNumParam, vlanParam))
+                        .build();
+            } else {
+                PiActionId actionId;
+                if (tableId.equals(FabricConstants.FABRIC_INGRESS_NEXT_SIMPLE)) {
+                    actionId = FabricConstants.FABRIC_INGRESS_NEXT_L3_ROUTING_SIMPLE;
+                } else if (tableId.equals(FabricConstants.FABRIC_INGRESS_NEXT_HASHED)) {
+                    actionId = FabricConstants.FABRIC_INGRESS_NEXT_L3_ROUTING_HASHED;
+                } else {
+                    throw new PiInterpreterException(format(INVALID_TREATMENT, "next", treatment));
+                }
+
+                // L3 routing
+                return PiAction.builder()
+                        .withId(actionId)
+                        .withParameters(ImmutableList.of(portNumParam,
+                                                         srcMacParam,
+                                                         dstMacParam))
+                        .build();
+            }
         }
 
         throw new PiInterpreterException(format(INVALID_TREATMENT, "next", treatment));
+    }
+
+    /*
+     * pop_vlan
+     */
+    public static PiAction mapEgressNextTreatment(TrafficTreatment treatment, PiTableId tableId) {
+        // Pop VLAN action for now, may add new action to this control block in the future.
+        return treatment.allInstructions()
+                .stream()
+                .filter(inst -> inst.type() == Instruction.Type.L2MODIFICATION)
+                .map(inst -> (L2ModificationInstruction) inst)
+                .filter(inst -> inst.subtype() == L2ModificationInstruction.L2SubType.VLAN_POP)
+                .findFirst()
+                .map(inst -> POP_VLAN)
+                .orElse(NOP);
     }
 }

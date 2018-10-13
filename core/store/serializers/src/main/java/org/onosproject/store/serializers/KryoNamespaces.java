@@ -15,6 +15,7 @@
  */
 package org.onosproject.store.serializers;
 
+import com.esotericsoftware.kryo.serializers.ClosureSerializer;
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -108,10 +109,6 @@ import org.onosproject.net.flow.StatTriggerFlag;
 import org.onosproject.net.flow.StoredFlowEntry;
 import org.onosproject.net.flow.TableId;
 import org.onosproject.net.flow.TableStatisticsEntry;
-import org.onosproject.net.flow.oldbatch.FlowRuleBatchEntry;
-import org.onosproject.net.flow.oldbatch.FlowRuleBatchEvent;
-import org.onosproject.net.flow.oldbatch.FlowRuleBatchOperation;
-import org.onosproject.net.flow.oldbatch.FlowRuleBatchRequest;
 import org.onosproject.net.flow.criteria.ArpHaCriterion;
 import org.onosproject.net.flow.criteria.ArpOpCriterion;
 import org.onosproject.net.flow.criteria.ArpPaCriterion;
@@ -156,13 +153,19 @@ import org.onosproject.net.flow.instructions.L2ModificationInstruction;
 import org.onosproject.net.flow.instructions.L3ModificationInstruction;
 import org.onosproject.net.flow.instructions.L4ModificationInstruction;
 import org.onosproject.net.flow.instructions.PiInstruction;
+import org.onosproject.net.flow.oldbatch.FlowRuleBatchEntry;
+import org.onosproject.net.flow.oldbatch.FlowRuleBatchEvent;
+import org.onosproject.net.flow.oldbatch.FlowRuleBatchOperation;
+import org.onosproject.net.flow.oldbatch.FlowRuleBatchRequest;
 import org.onosproject.net.flowobjective.DefaultFilteringObjective;
 import org.onosproject.net.flowobjective.DefaultForwardingObjective;
 import org.onosproject.net.flowobjective.DefaultNextObjective;
+import org.onosproject.net.flowobjective.DefaultObjectiveContext;
 import org.onosproject.net.flowobjective.FilteringObjective;
 import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.flowobjective.NextObjective;
 import org.onosproject.net.flowobjective.Objective;
+import org.onosproject.net.flowobjective.ObjectiveError;
 import org.onosproject.net.host.DefaultHostDescription;
 import org.onosproject.net.host.HostDescription;
 import org.onosproject.net.intent.ConnectivityIntent;
@@ -199,6 +202,8 @@ import org.onosproject.net.intent.constraint.PartialFailureConstraint;
 import org.onosproject.net.intent.constraint.ProtectionConstraint;
 import org.onosproject.net.intent.constraint.WaypointConstraint;
 import org.onosproject.net.link.DefaultLinkDescription;
+import org.onosproject.net.meter.MeterCellId;
+import org.onosproject.net.meter.MeterCellId.MeterCellType;
 import org.onosproject.net.meter.MeterId;
 import org.onosproject.net.packet.DefaultOutboundPacket;
 import org.onosproject.net.packet.DefaultPacketRequest;
@@ -222,6 +227,7 @@ import org.onosproject.net.pi.runtime.PiActionGroup;
 import org.onosproject.net.pi.runtime.PiActionGroupHandle;
 import org.onosproject.net.pi.runtime.PiActionGroupId;
 import org.onosproject.net.pi.runtime.PiActionGroupMember;
+import org.onosproject.net.pi.runtime.PiActionGroupMemberHandle;
 import org.onosproject.net.pi.runtime.PiActionGroupMemberId;
 import org.onosproject.net.pi.runtime.PiActionParam;
 import org.onosproject.net.pi.runtime.PiControlMetadata;
@@ -235,14 +241,14 @@ import org.onosproject.net.pi.runtime.PiGroupKey;
 import org.onosproject.net.pi.runtime.PiHandle;
 import org.onosproject.net.pi.runtime.PiLpmFieldMatch;
 import org.onosproject.net.pi.runtime.PiMatchKey;
+import org.onosproject.net.pi.runtime.PiMeterCellId;
 import org.onosproject.net.pi.runtime.PiPacketOperation;
-import org.onosproject.net.pi.service.PiPipeconfConfig;
 import org.onosproject.net.pi.runtime.PiRangeFieldMatch;
 import org.onosproject.net.pi.runtime.PiTableAction;
 import org.onosproject.net.pi.runtime.PiTableEntry;
-import org.onosproject.net.pi.runtime.PiTernaryFieldMatch;
-import org.onosproject.net.pi.runtime.PiValidFieldMatch;
 import org.onosproject.net.pi.runtime.PiTableEntryHandle;
+import org.onosproject.net.pi.runtime.PiTernaryFieldMatch;
+import org.onosproject.net.pi.service.PiPipeconfConfig;
 import org.onosproject.net.pi.service.PiTranslatable;
 import org.onosproject.net.pi.service.PiTranslatedEntity;
 import org.onosproject.net.provider.ProviderId;
@@ -270,6 +276,7 @@ import org.onosproject.store.service.WorkQueueStats;
 import org.onosproject.ui.model.topo.UiTopoLayoutId;
 import org.onosproject.upgrade.Upgrade;
 
+import java.lang.invoke.SerializedLambda;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -349,10 +356,15 @@ public final class KryoNamespaces {
             .register(char[].class)
             .register(String[].class)
             .register(boolean[].class)
+            // For serializing lambda functions
+            .register(Object[].class)
+            .register(Class.class)
+            .register(SerializedLambda.class)
+            .register(new ClosureSerializer(), ClosureSerializer.Closure.class)
             .build("BASIC");
 
     /**
-     * KryoNamespace which can serialize ON.lab misc classes.
+     * KryoNamespace which can serialize ONF misc classes.
      */
     public static final int MISC_MAX_SIZE = 30;
 
@@ -409,6 +421,8 @@ public final class KryoNamespaces {
                     Instructions.StatTriggerInstruction.class,
                     StatTriggerFlag.class,
                     StatTriggerField.class,
+                    MeterCellId.class,
+                    MeterCellType.class,
                     MeterId.class,
                     Version.class,
                     ControllerNode.State.class,
@@ -585,7 +599,9 @@ public final class KryoNamespaces {
                     FilteringObjective.Type.class,
                     DefaultNextObjective.class,
                     NextObjective.Type.class,
-                    Objective.Operation.class
+                    Objective.Operation.class,
+                    DefaultObjectiveContext.class,
+                    ObjectiveError.class
             )
             .register(new DefaultApplicationIdSerializer(), DefaultApplicationId.class)
             .register(new UriSerializer(), URI.class)
@@ -660,6 +676,7 @@ public final class KryoNamespaces {
                     PiMatchFieldId.class,
                     PiMatchType.class,
                     PiMeterId.class,
+                    PiMeterCellId.class,
                     PiMeterType.class,
                     PiPacketOperationType.class,
                     PiPipeconfId.class,
@@ -671,6 +688,7 @@ public final class KryoNamespaces {
                     PiActionGroupHandle.class,
                     PiActionGroupId.class,
                     PiActionGroupMember.class,
+                    PiActionGroupMemberHandle.class,
                     PiActionGroupMemberId.class,
                     PiActionParam.class,
                     PiControlMetadata.class,
@@ -690,7 +708,6 @@ public final class KryoNamespaces {
                     PiTableAction.class,
                     PiTableEntry.class,
                     PiTernaryFieldMatch.class,
-                    PiValidFieldMatch.class,
                     // PI service
                     PiTableEntryHandle.class,
                     PiTranslatedEntity.class,
@@ -701,6 +718,10 @@ public final class KryoNamespaces {
             )
             .register(Upgrade.class)
             .register(Upgrade.Status.class)
+            .register(L3ModificationInstruction.ModArpEthInstruction.class,
+                    L3ModificationInstruction.ModArpEthInstruction.class,
+                    L3ModificationInstruction.ModArpOpInstruction.class,
+                    L3ModificationInstruction.ModArpIPInstruction.class)
             .build("API");
 
     /**

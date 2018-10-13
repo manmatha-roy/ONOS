@@ -250,9 +250,9 @@ public class SimpleDeviceStore
 
     // implement differently if desired
     @Override
-    public boolean markOnline(DeviceId deviceId) {
+    public DeviceEvent markOnline(DeviceId deviceId) {
         log.warn("Mark online not supported");
-        return false;
+        return null;
     }
 
     @Override
@@ -725,7 +725,9 @@ public class SimpleDeviceStore
             if (oldOne != null) {
                 SparseAnnotations merged = union(oldOne.annotations(),
                                                  newDesc.annotations());
-                newOne = new DefaultPortDescription(newOne, merged);
+                newOne = DefaultPortDescription.builder(newOne)
+                            .annotations(merged)
+                            .build();
             }
             return portDescs.put(newOne.portNumber(), newOne);
         }

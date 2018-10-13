@@ -18,6 +18,7 @@ package org.onosproject.cli.net;
 
 import org.apache.karaf.shell.commands.Argument;
 import org.apache.karaf.shell.commands.Command;
+import org.apache.karaf.shell.commands.Option;
 import org.onlab.packet.IpAddress;
 import org.onosproject.cli.AbstractShellCommand;
 import org.onosproject.net.Annotations;
@@ -45,17 +46,37 @@ public class DeviceSetControllersCommand extends AbstractShellCommand {
 
     @Argument(index = 1, name = "controllersListStrings", description = "list of " +
             "controllers to set for the specified device",
-            required = true, multiValued = true)
+            required = false, multiValued = true)
     String[] controllersListStrings = null;
 
+    @Option(name = "--remove",
+            description = "Remove specified controllers configuration")
+    private boolean removeCont = false;
+
+    @Option(name = "--remove-all",
+            description = "Remove all controllers configuration, " +
+                    "does not require any input")
+    private boolean removeAll = false;
+
     private DeviceId deviceId;
-    private List<ControllerInfo> newControllers = new ArrayList<>();
+    private List<ControllerInfo> controllers = new ArrayList<>();
 
     @Override
     protected void execute() {
 
-        Arrays.asList(controllersListStrings).forEach(
-                cInfoString -> newControllers.add(parseCInfoString(cInfoString)));
+        if (controllersListStrings == null && !removeCont && !removeAll) {
+            print("No controller are given, skipping.");
+            return;
+        }
+        if (controllersListStrings != null) {
+            Arrays.asList(controllersListStrings).forEach(
+                    cInfoString -> {
+                        ControllerInfo controllerInfo = parseCInfoString(cInfoString);
+                        if (controllerInfo != null) {
+                            controllers.add(controllerInfo);
+                        }
+                    });
+        }
         DriverService service = get(DriverService.class);
         deviceId = DeviceId.deviceId(uri);
         DriverHandler h = service.createHandler(deviceId);
@@ -63,7 +84,27 @@ public class DeviceSetControllersCommand extends AbstractShellCommand {
         print("before:");
         config.getControllers().forEach(c -> print(c.target()));
         try {
-            config.setControllers(newControllers);
+            if (removeAll) {
+                if (!controllers.isEmpty()) {
+                    print("Controllers list should be empty to remove all controllers");
+                } else {
+                    List<ControllerInfo> controllersToRemove = config.getControllers();
+                    controllersToRemove.forEach(c -> print("Will remove " + c.target()));
+                    config.removeControllers(controllersToRemove);
+                }
+            } else {
+                if (controllers.isEmpty()) {
+                    print("Controllers list is empty, cannot set/remove empty controllers");
+                } else {
+                    if (removeCont) {
+                        print("Will remove specified controllers");
+                        config.removeControllers(controllers);
+                    } else {
+                        print("Will add specified controllers");
+                        config.setControllers(controllers);
+                    }
+                }
+            }
         } catch (NullPointerException e) {
             print("No Device with requested parameters {} ", uri);
         }
@@ -88,15 +129,24 @@ public class DeviceSetControllersCommand extends AbstractShellCommand {
                 return null;
             }
 
-            String[] data = config[0].split(":");
-            String type = data[0];
-            IpAddress ip = IpAddress.valueOf(data[1]);
-            int port = Integer.parseInt(data[2]);
-
-            return new ControllerInfo(ip, port, type, annotation);
+            return getControllerInfo(annotation, config[0]);
         } else {
-            print(config[0]);
-            return new ControllerInfo(config[0]);
+            return getControllerInfo(null, config[0]);
         }
+    }
+
+    private ControllerInfo getControllerInfo(Annotations annotation, String s) {
+        String[] data = s.split(":");
+        if (data.length != 3) {
+            print("Wrong format of the controller %s, should be in the format <protocol>:<ip>:<port>", s);
+            return null;
+        }
+        String type = data[0];
+        IpAddress ip = IpAddress.valueOf(data[1]);
+        int port = Integer.parseInt(data[2]);
+        if (annotation != null) {
+            return new ControllerInfo(ip, port, type, annotation);
+        }
+        return new ControllerInfo(ip, port, type);
     }
 }

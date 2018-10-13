@@ -133,11 +133,10 @@ public final class OpticalPortOperator implements PortConfigOperator {
             // result is no-op
             return descr;
         }
-        return new DefaultPortDescription(port,
-                                          descr.isEnabled(),
-                                          descr.type(),
-                                          descr.portSpeed(),
-                                          sa);
+        return DefaultPortDescription.builder(descr)
+                .withPortNumber(port)
+                .annotations(sa)
+                .build();
     }
 
     /**

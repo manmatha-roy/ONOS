@@ -15,13 +15,12 @@
  */
 package org.onosproject.ovsdb.controller;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
+import com.google.common.util.concurrent.ListenableFuture;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.PortNumber;
 import org.onosproject.net.behaviour.ControllerInfo;
+import org.onosproject.net.behaviour.DeviceCpuStats;
+import org.onosproject.net.behaviour.DeviceMemoryStats;
 import org.onosproject.net.behaviour.MirroringName;
 import org.onosproject.net.behaviour.MirroringStatistics;
 import org.onosproject.net.behaviour.QosId;
@@ -31,8 +30,13 @@ import org.onosproject.ovsdb.rfc.jsonrpc.OvsdbRpc;
 import org.onosproject.ovsdb.rfc.message.TableUpdates;
 import org.onosproject.ovsdb.rfc.notation.Row;
 import org.onosproject.ovsdb.rfc.schema.DatabaseSchema;
+import org.onosproject.ovsdb.rfc.table.Interface;
+import org.onosproject.ovsdb.rfc.table.OvsdbTable;
 
-import com.google.common.util.concurrent.ListenableFuture;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Represents to provider facing side of a node.
@@ -263,6 +267,21 @@ public interface OvsdbClientService extends OvsdbRpc {
     Set<OvsdbPort> getPorts();
 
     /**
+     * Gets interfaces of bridge.
+     *
+     * @return set of interfaces; empty if no interface is find
+     */
+    Set<Interface> getInterfaces();
+
+    /**
+     * Gets the interface with given portName.
+     *
+     * @param intf interface name
+     * @return interface
+     */
+    Interface getInterface(String intf);
+
+    /**
      * Checks if the node is still connected.
      *
      * @return true if the node is still connected
@@ -372,4 +391,27 @@ public interface OvsdbClientService extends OvsdbRpc {
      * @return errorstatus true if input port list contains error, false otherwise
      */
     boolean getPortError(List<OvsdbPortName>  portNames, DeviceId bridgeId);
+
+    /**
+     * Gets First row for the given table of given DB.
+     *
+     * @param dbName  db name
+     * @param tblName table name
+     * @return first table entry
+     */
+
+    public Optional<Object> getFirstRow(String dbName, OvsdbTable tblName);
+
+    /**
+     * Gets device CPU usage in percentage.
+     * @return device memory usage.
+     */
+    Optional<DeviceCpuStats> getDeviceCpuUsage();
+
+    /**
+     * Gets device memory usage in kilobytes.
+     * @return device memory usage.
+     */
+    Optional<DeviceMemoryStats> getDeviceMemoryUsage();
+
 }

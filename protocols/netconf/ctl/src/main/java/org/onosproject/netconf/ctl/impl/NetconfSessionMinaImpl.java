@@ -21,6 +21,7 @@ import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.future.ConnectFuture;
@@ -29,11 +30,16 @@ import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
+import org.onlab.osgi.DefaultServiceDirectory;
+import org.onlab.osgi.ServiceDirectory;
 import org.onlab.util.SharedExecutors;
-import org.onosproject.netconf.DatastoreId;
+import org.onosproject.net.DeviceId;
+import org.onosproject.net.driver.Driver;
+import org.onosproject.net.driver.DriverService;
+import org.onosproject.netconf.AbstractNetconfSession;
 import org.onosproject.netconf.NetconfDeviceInfo;
 import org.onosproject.netconf.NetconfDeviceOutputEvent;
 import org.onosproject.netconf.NetconfDeviceOutputEvent.Type;
@@ -43,8 +49,6 @@ import org.onosproject.netconf.NetconfSession;
 import org.onosproject.netconf.NetconfSessionFactory;
 import org.onosproject.netconf.NetconfTransportException;
 import org.slf4j.Logger;
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.slf4j.LoggerFactory.getLogger;
 
 import java.io.CharArrayReader;
 import java.io.IOException;
@@ -54,14 +58,15 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -72,10 +77,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.slf4j.LoggerFactory.getLogger;
+
 /**
  * Implementation of a NETCONF session to talk to a device.
  */
-public class NetconfSessionMinaImpl implements NetconfSession {
+public class NetconfSessionMinaImpl extends AbstractNetconfSession {
 
     private static final Logger log = getLogger(NetconfSessionMinaImpl.class);
 
@@ -89,29 +97,11 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     private static final String END_OF_RPC_OPEN_TAG = "\">";
     private static final String EQUAL = "=";
     private static final String NUMBER_BETWEEN_QUOTES_MATCHER = "\"+([0-9]+)+\"";
-    private static final String RPC_OPEN = "<rpc ";
-    private static final String RPC_CLOSE = "</rpc>";
-    private static final String GET_OPEN = "<get>";
-    private static final String GET_CLOSE = "</get>";
-    private static final String WITH_DEFAULT_OPEN = "<with-defaults ";
-    private static final String WITH_DEFAULT_CLOSE = "</with-defaults>";
-    private static final String DEFAULT_OPERATION_OPEN = "<default-operation>";
-    private static final String DEFAULT_OPERATION_CLOSE = "</default-operation>";
-    private static final String SUBTREE_FILTER_OPEN = "<filter type=\"subtree\">";
     private static final String SUBTREE_FILTER_CLOSE = "</filter>";
-    private static final String EDIT_CONFIG_OPEN = "<edit-config>";
-    private static final String EDIT_CONFIG_CLOSE = "</edit-config>";
-    private static final String TARGET_OPEN = "<target>";
-    private static final String TARGET_CLOSE = "</target>";
     // FIXME hard coded namespace nc
-    private static final String CONFIG_OPEN = "<config xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">";
-    private static final String CONFIG_CLOSE = "</config>";
     private static final String XML_HEADER =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
-    private static final String NETCONF_BASE_NAMESPACE =
-            "xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\"";
-    private static final String NETCONF_WITH_DEFAULTS_NAMESPACE =
-            "xmlns=\"urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults\"";
+
     // FIXME hard coded namespace base10
     private static final String SUBSCRIPTION_SUBTREE_FILTER_OPEN =
             "<filter xmlns:base10=\"urn:ietf:params:xml:ns:netconf:base:1.0\" base10:type=\"subtree\">";
@@ -128,6 +118,9 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     private static final String MSGLEN_REGEX_PATTERN = "\n#\\d+\n";
     private static final String NETCONF_10_CAPABILITY = "urn:ietf:params:netconf:base:1.0";
     private static final String NETCONF_11_CAPABILITY = "urn:ietf:params:netconf:base:1.1";
+    private static final String NETCONF_CLIENT_CAPABILITY = "netconfClientCapability";
+
+    private static ServiceDirectory directory = new DefaultServiceDirectory();
 
     private String sessionID;
     private final AtomicInteger messageIdInteger = new AtomicInteger(1);
@@ -155,17 +148,19 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     private int replyTimeout;
     private int idleTimeout;
 
-
     private ClientChannel channel = null;
     private ClientSession session = null;
     private SshClient client = null;
-
 
     public NetconfSessionMinaImpl(NetconfDeviceInfo deviceInfo) throws NetconfException {
         this.deviceInfo = deviceInfo;
         replies = new ConcurrentHashMap<>();
         errorReplies = new ArrayList<>();
-
+        Set<String> capabilities = getClientCapabilites(deviceInfo.getDeviceId());
+        if (!capabilities.isEmpty()) {
+            capabilities.addAll(Sets.newHashSet(onosCapabilities));
+            setOnosCapabilities(capabilities);
+        }
         // FIXME should not immediately start session on construction
         // setOnosCapabilities() is useless due to this behavior
         startConnection();
@@ -179,6 +174,28 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         // FIXME should not immediately start session on construction
         // setOnosCapabilities() is useless due to this behavior
         startConnection();
+    }
+
+    /**
+     * Get the list of the netconf client capabilities from device driver property.
+     *
+     * @param deviceId the deviceID for which to recover the capabilities from the driver.
+     * @return the String list of clientCapability property, or null if it is not configured
+     */
+    public Set<String> getClientCapabilites(DeviceId deviceId) {
+        Set<String> capabilities = new LinkedHashSet<>();
+        DriverService driverService = directory.get(DriverService.class);
+        Driver driver = driverService.getDriver(deviceId);
+        if (driver == null) {
+            return capabilities;
+        }
+        String clientCapabilities = driver.getProperty(NETCONF_CLIENT_CAPABILITY);
+        if (clientCapabilities == null) {
+            return capabilities;
+        }
+        String[] textStr = clientCapabilities.split("\\|");
+        capabilities.addAll(Arrays.asList(textStr));
+        return capabilities;
     }
 
     private void startConnection() throws NetconfException {
@@ -199,6 +216,9 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     }
 
     private void startClient() throws IOException {
+        log.info("Creating NETCONF session to {}",
+                 deviceInfo.getDeviceId());
+
         client = SshClient.setUpDefaultClient();
         client.getProperties().putIfAbsent(FactoryManager.IDLE_TIMEOUT,
                 TimeUnit.SECONDS.toMillis(idleTimeout));
@@ -208,6 +228,8 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         client.setKeyPairProvider(new SimpleGeneratorHostKeyProvider());
         startSession();
     }
+
+    //TODO: Remove the default methods already implemented in NetconfSession
 
     // FIXME blocking
     @Deprecated
@@ -313,14 +335,6 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         subscriptionConnected = true;
     }
 
-    @Override
-    public void startSubscription() throws NetconfException {
-        if (!subscriptionConnected) {
-            startSubscriptionStream(null);
-        }
-        streamHandler.setEnableNotifications(true);
-    }
-
     @Beta
     @Override
     public void startSubscription(String filterSchema) throws NetconfException {
@@ -397,15 +411,15 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     @Override
     public void checkAndReestablish() throws NetconfException {
         try {
-            if (client.isClosed()) {
+            if (client.isClosed() || client.isClosing()) {
                 log.debug("Trying to restart the whole SSH connection with {}", deviceInfo.getDeviceId());
                 cleanUp();
                 startConnection();
-            } else if (session.isClosed()) {
+            } else if (session.isClosed() || session.isClosing()) {
                 log.debug("Trying to restart the session with {}", session, deviceInfo.getDeviceId());
                 cleanUp();
                 startSession();
-            } else if (channel.isClosed()) {
+            } else if (channel.isClosed() || channel.isClosing()) {
                 log.debug("Trying to reopen the channel with {}", deviceInfo.getDeviceId());
                 cleanUp();
                 openChannel();
@@ -639,266 +653,6 @@ public class NetconfSessionMinaImpl implements NetconfSession {
     }
 
     @Override
-    public String doWrappedRpc(String request) throws NetconfException {
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append(RPC_OPEN);
-        rpc.append(MESSAGE_ID_STRING);
-        rpc.append(EQUAL);
-        rpc.append("\"");
-        rpc.append(messageIdInteger.get());
-        rpc.append("\"  ");
-        rpc.append(NETCONF_BASE_NAMESPACE).append(">\n");
-        rpc.append(request);
-        rpc.append(RPC_CLOSE).append(NEW_LINE);
-        rpc.append(ENDPATTERN);
-        String reply = sendRequest(rpc.toString());
-        checkReply(reply);
-        return reply;
-    }
-
-    @Override
-    public String get(String request) throws NetconfException {
-        return requestSync(request);
-    }
-
-    @Override
-    public String get(String filterSchema, String withDefaultsMode) throws NetconfException {
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append(RPC_OPEN);
-        rpc.append(MESSAGE_ID_STRING);
-        rpc.append(EQUAL);
-        rpc.append("\"");
-        rpc.append(messageIdInteger.get());
-        rpc.append("\"  ");
-        rpc.append(NETCONF_BASE_NAMESPACE).append(">\n");
-        rpc.append(GET_OPEN).append(NEW_LINE);
-        if (filterSchema != null) {
-            rpc.append(SUBTREE_FILTER_OPEN).append(NEW_LINE);
-            rpc.append(filterSchema).append(NEW_LINE);
-            rpc.append(SUBTREE_FILTER_CLOSE).append(NEW_LINE);
-        }
-        if (withDefaultsMode != null) {
-            rpc.append(WITH_DEFAULT_OPEN).append(NETCONF_WITH_DEFAULTS_NAMESPACE).append(">");
-            rpc.append(withDefaultsMode).append(WITH_DEFAULT_CLOSE).append(NEW_LINE);
-        }
-        rpc.append(GET_CLOSE).append(NEW_LINE);
-        rpc.append(RPC_CLOSE).append(NEW_LINE);
-        rpc.append(ENDPATTERN);
-        String reply = sendRequest(rpc.toString());
-        checkReply(reply);
-        return reply;
-    }
-
-    @Override
-    public String getConfig(DatastoreId netconfTargetConfig) throws NetconfException {
-        return getConfig(netconfTargetConfig, null);
-    }
-
-    @Override
-    public String getConfig(DatastoreId netconfTargetConfig,
-                            String configurationSchema) throws NetconfException {
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append("<rpc ");
-        rpc.append(MESSAGE_ID_STRING);
-        rpc.append(EQUAL);
-        rpc.append("\"");
-        rpc.append(messageIdInteger.get());
-        rpc.append("\"  ");
-        rpc.append("xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">\n");
-        rpc.append("<get-config>\n");
-        rpc.append("<source>\n");
-        rpc.append("<").append(netconfTargetConfig).append("/>");
-        rpc.append("</source>");
-        if (configurationSchema != null) {
-            rpc.append("<filter type=\"subtree\">\n");
-            rpc.append(configurationSchema).append("\n");
-            rpc.append("</filter>\n");
-        }
-        rpc.append("</get-config>\n");
-        rpc.append("</rpc>\n");
-        rpc.append(ENDPATTERN);
-        String reply = sendRequest(rpc.toString());
-        return checkReply(reply) ? reply : "ERROR " + reply;
-    }
-
-    @Override
-    public boolean editConfig(String newConfiguration) throws NetconfException {
-        if (!newConfiguration.endsWith(ENDPATTERN)) {
-            newConfiguration = newConfiguration + ENDPATTERN;
-        }
-        return checkReply(sendRequest(newConfiguration));
-    }
-
-    @Override
-    public boolean editConfig(DatastoreId netconfTargetConfig,
-                              String mode,
-                              String newConfiguration)
-            throws NetconfException {
-
-        newConfiguration = newConfiguration.trim();
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append(RPC_OPEN);
-        rpc.append(MESSAGE_ID_STRING);
-        rpc.append(EQUAL);
-        rpc.append("\"");
-        rpc.append(messageIdInteger.get());
-        rpc.append("\"  ");
-        rpc.append(NETCONF_BASE_NAMESPACE).append(">\n");
-        rpc.append(EDIT_CONFIG_OPEN).append("\n");
-        rpc.append(TARGET_OPEN);
-        rpc.append("<").append(netconfTargetConfig).append("/>");
-        rpc.append(TARGET_CLOSE).append("\n");
-        if (mode != null) {
-            rpc.append(DEFAULT_OPERATION_OPEN);
-            rpc.append(mode);
-            rpc.append(DEFAULT_OPERATION_CLOSE).append("\n");
-        }
-        rpc.append(CONFIG_OPEN).append("\n");
-        rpc.append(newConfiguration);
-        rpc.append(CONFIG_CLOSE).append("\n");
-        rpc.append(EDIT_CONFIG_CLOSE).append("\n");
-        rpc.append(RPC_CLOSE);
-        rpc.append(ENDPATTERN);
-        log.debug("{}", rpc);
-        String reply = sendRequest(rpc.toString());
-        return checkReply(reply);
-    }
-
-    @Override
-    public boolean copyConfig(DatastoreId destination,
-                              DatastoreId source)
-            throws NetconfException {
-        return bareCopyConfig(destination.asXml(), source.asXml());
-    }
-
-    @Override
-    public boolean copyConfig(DatastoreId netconfTargetConfig,
-                              String newConfiguration)
-            throws NetconfException {
-        return bareCopyConfig(netconfTargetConfig.asXml(),
-                normalizeCopyConfigParam(newConfiguration));
-    }
-
-    @Override
-    public boolean copyConfig(String netconfTargetConfig,
-                              String newConfiguration) throws NetconfException {
-        return bareCopyConfig(normalizeCopyConfigParam(netconfTargetConfig),
-                normalizeCopyConfigParam(newConfiguration));
-    }
-
-    /**
-     * Normalize String parameter passed to copy-config API.
-     * <p>
-     * Provided for backward compatibility purpose
-     *
-     * @param input passed to copyConfig API
-     * @return XML likely to be suitable for copy-config source or target
-     */
-    private static CharSequence normalizeCopyConfigParam(String input) {
-        input = input.trim();
-        if (input.startsWith("<url")) {
-            return input;
-        } else if (!input.startsWith("<")) {
-            // assume it is a datastore name
-            return DatastoreId.datastore(input).asXml();
-        } else if (!input.startsWith("<config>")) {
-            return "<config>" + input + "</config>";
-        }
-        return input;
-    }
-
-    private boolean bareCopyConfig(CharSequence target,
-                                   CharSequence source)
-            throws NetconfException {
-
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append(RPC_OPEN);
-        rpc.append(NETCONF_BASE_NAMESPACE).append(">\n");
-        rpc.append("<copy-config>");
-        rpc.append("<target>");
-        rpc.append(target);
-        rpc.append("</target>");
-        rpc.append("<source>");
-        rpc.append(source);
-        rpc.append("</source>");
-        rpc.append("</copy-config>");
-        rpc.append("</rpc>");
-        rpc.append(ENDPATTERN);
-        return checkReply(sendRequest(rpc.toString()));
-    }
-
-    @Override
-    public boolean deleteConfig(DatastoreId netconfTargetConfig) throws NetconfException {
-        if (netconfTargetConfig.equals(DatastoreId.RUNNING)) {
-            log.warn("Target configuration for delete operation can't be \"running\"",
-                    netconfTargetConfig);
-            return false;
-        }
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append("<rpc>");
-        rpc.append("<delete-config>");
-        rpc.append("<target>");
-        rpc.append("<").append(netconfTargetConfig).append("/>");
-        rpc.append("</target>");
-        rpc.append("</delete-config>");
-        rpc.append("</rpc>");
-        rpc.append(ENDPATTERN);
-        return checkReply(sendRequest(rpc.toString()));
-    }
-
-    @Override
-    public boolean lock(DatastoreId configType) throws NetconfException {
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append("<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">\n");
-        rpc.append("<lock>");
-        rpc.append("<target>");
-        rpc.append("<");
-        rpc.append(configType.id());
-        rpc.append("/>");
-        rpc.append("</target>");
-        rpc.append("</lock>");
-        rpc.append("</rpc>");
-        rpc.append(ENDPATTERN);
-        String lockReply = sendRequest(rpc.toString());
-        return checkReply(lockReply);
-    }
-
-    @Override
-    public boolean unlock(DatastoreId configType) throws NetconfException {
-        StringBuilder rpc = new StringBuilder(XML_HEADER);
-        rpc.append("<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">\n");
-        rpc.append("<unlock>");
-        rpc.append("<target>");
-        rpc.append("<");
-        rpc.append(configType.id());
-        rpc.append("/>");
-        rpc.append("</target>");
-        rpc.append("</unlock>");
-        rpc.append("</rpc>");
-        rpc.append(ENDPATTERN);
-        String unlockReply = sendRequest(rpc.toString());
-        return checkReply(unlockReply);
-    }
-
-    @Override
-    public boolean close() throws NetconfException {
-        return close(false);
-    }
-
-    private boolean close(boolean force) throws NetconfException {
-        StringBuilder rpc = new StringBuilder();
-        rpc.append("<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">");
-        if (force) {
-            rpc.append("<kill-session/>");
-        } else {
-            rpc.append("<close-session/>");
-        }
-        rpc.append("</rpc>");
-        rpc.append(ENDPATTERN);
-        return checkReply(sendRequest(rpc.toString())) || close(true);
-    }
-
-    @Override
     public String getSessionId() {
         return sessionID;
     }
@@ -926,7 +680,9 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         streamHandler.removeDeviceEventListener(listener);
     }
 
-    private boolean checkReply(String reply) {
+    @Override
+    protected boolean checkReply(String reply) {
+        // Overridden to record error logs
         if (reply != null) {
             if (!reply.contains("<rpc-error>")) {
                 log.debug("Device {} sent reply {}", deviceInfo, reply);
@@ -941,6 +697,23 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         }
         log.warn("Device {} has error in reply {}", deviceInfo, reply);
         return false;
+    }
+
+    @Override
+    public boolean close() throws NetconfException {
+        try {
+            return super.close();
+        } catch (IOException ioe) {
+            throw new NetconfException(ioe.getMessage());
+        } finally {
+            try {
+                session.close();
+                channel.close();
+                client.close();
+            } catch (IOException ioe) {
+                log.warn("Error closing session {} on {}", sessionID, deviceInfo, ioe);
+            }
+        }
     }
 
     protected void publishEvent(NetconfDeviceOutputEvent event) {
@@ -1019,6 +792,10 @@ public class NetconfSessionMinaImpl implements NetconfSession {
         }
     }
 
+    /**
+     * @deprecated in 1.14.0
+     */
+    @Deprecated
     public static class MinaSshNetconfSessionFactory implements NetconfSessionFactory {
 
         @Override

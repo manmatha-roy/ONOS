@@ -46,6 +46,7 @@ import java.net.URI;
 import java.util.Optional;
 
 import static javax.ws.rs.core.Response.Status.*;
+import static org.onlab.util.Tools.readTreeFromStream;
 
 /**
  * Utilities used by the RESTCONF app.
@@ -78,7 +79,7 @@ public final class RestconfUtils {
         ObjectNode rootNode;
         ObjectMapper mapper = new ObjectMapper();
         try {
-            rootNode = (ObjectNode) mapper.readTree(inputStream);
+            rootNode = readTreeFromStream(mapper, inputStream);
         } catch (IOException e) {
             throw new RestconfException("ERROR: InputStream failed to parse",
                     e, RestconfError.ErrorTag.OPERATION_FAILED, INTERNAL_SERVER_ERROR,
@@ -145,7 +146,8 @@ public final class RestconfUtils {
         } catch (RestconfException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.error("convertJsonToDataNode failure: {}", ex.getMessage());
+            log.error("convertJsonToDataNode failure: {}", ex.getMessage(), ex);
+            log.info("Failed JSON: \n{}", rootNode);
             log.debug("convertJsonToDataNode failure", ex);
             throw new RestconfException("ERROR: JSON cannot be converted to DataNode",
                     ex, RestconfError.ErrorTag.OPERATION_FAILED, INTERNAL_SERVER_ERROR,

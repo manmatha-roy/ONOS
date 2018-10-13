@@ -7,8 +7,11 @@ COMPILE_DEPS = [
     '//lib:commons-codec',
     '//lib:retrofit',
     '//lib:okhttp',
+    '//lib:logging-interceptor',
     '//lib:okio',
-    '//lib:gson',
+    '//lib:moshi',
+    '//lib:converter-moshi',
+    '//lib:com_google_code_gson_gson',
     '//cli:onos-cli',
 ]
 
@@ -18,8 +21,11 @@ EXCLUDED_BUNDLES = [
     '//lib:commons-codec',
     '//lib:retrofit',
     '//lib:okhttp',
-    '//lib:gson',
+    '//lib:logging-interceptor',
+    '//lib:com_google_code_gson_gson',
     '//lib:okio',
+    '//lib:moshi',
+    '//lib:converter-moshi',
 ]
 
 TEST_DEPS = [

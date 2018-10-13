@@ -33,8 +33,10 @@ import org.onosproject.store.service.LeaderElectorBuilder;
 import org.onosproject.store.service.Serializer;
 import org.onosproject.store.service.StorageService;
 import org.onosproject.store.service.Topic;
+import org.onosproject.store.service.TopicBuilder;
 import org.onosproject.store.service.TransactionContextBuilder;
 import org.onosproject.store.service.WorkQueue;
+import org.onosproject.store.service.WorkQueueBuilder;
 
 /**
  * Adapter for the storage service.
@@ -87,6 +89,16 @@ public class StorageServiceAdapter implements StorageService {
 
     @Override
     public LeaderElectorBuilder leaderElectorBuilder() {
+        return null;
+    }
+
+    @Override
+    public <T> TopicBuilder<T> topicBuilder() {
+        return null;
+    }
+
+    @Override
+    public <E> WorkQueueBuilder<E> workQueueBuilder() {
         return null;
     }
 

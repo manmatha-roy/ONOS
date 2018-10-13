@@ -41,6 +41,8 @@ import org.onosproject.net.pi.model.PiMeterType;
 import org.onosproject.net.pi.model.PiPacketOperationModel;
 import org.onosproject.net.pi.model.PiPacketOperationType;
 import org.onosproject.net.pi.model.PiPipelineModel;
+import org.onosproject.net.pi.model.PiRegisterId;
+import org.onosproject.net.pi.model.PiRegisterModel;
 import org.onosproject.net.pi.model.PiTableId;
 import org.onosproject.net.pi.model.PiTableModel;
 import org.onosproject.net.pi.model.PiTableType;
@@ -140,6 +142,25 @@ public class P4PipelineModelTest {
     private static final ImmutableMap<PiMeterId, PiMeterModel> METERS_2 =
             new ImmutableMap.Builder<PiMeterId, PiMeterModel>()
                     .put(PI_METER_ID_2, P4_METER_MODEL_2)
+                    .build();
+
+    /* Registers */
+    private static final PiRegisterId PI_REGISTER_ID_1 = PiRegisterId.of("Register1");
+    private static final PiRegisterId PI_REGISTER_ID_2 = PiRegisterId.of("Register2");
+
+    private static final long REGISTER_SIZE_1 = 1000;
+    private static final long REGISTER_SIZE_2 = 2000;
+
+    private static final P4RegisterModel P4_REGISTER_MODEL_1 = new P4RegisterModel(PI_REGISTER_ID_1, REGISTER_SIZE_1);
+    private static final P4RegisterModel P4_REGISTER_MODEL_2 = new P4RegisterModel(PI_REGISTER_ID_2, REGISTER_SIZE_2);
+
+    private static final ImmutableMap<PiRegisterId, PiRegisterModel> REGISTERS_1 =
+            new ImmutableMap.Builder<PiRegisterId, PiRegisterModel>()
+                    .put(PI_REGISTER_ID_1, P4_REGISTER_MODEL_1)
+                    .build();
+    private static final ImmutableMap<PiRegisterId, PiRegisterModel> REGISTERS_2 =
+            new ImmutableMap.Builder<PiRegisterId, PiRegisterModel>()
+                    .put(PI_REGISTER_ID_2, P4_REGISTER_MODEL_2)
                     .build();
 
     /* Match Fields */
@@ -248,14 +269,17 @@ public class P4PipelineModelTest {
     private static final boolean HAS_DEFAULT_MUTABLE_PARAMS_1 = true;
     private static final boolean HAS_DEFAULT_MUTABLE_PARAMS_2 = false;
 
+    private static final boolean IS_CONST_TABLE_1 = true;
+    private static final boolean IS_CONST_TABLE_2 = false;
+
     private static final PiTableModel P4_TABLE_MODEL_1 =
             new P4TableModel(PI_TABLE_ID_1, PI_TABLE_TYPE_1, P4_ACTION_PROFILE_MODEL_1, MAX_SIZE_1, COUNTERS_1,
                              METERS_1, SUPPORT_AGING_1, MATCH_FIELDS_1, ACTIONS_1, P4_ACTION_MODEL_DEFAULT_1,
-                             HAS_DEFAULT_MUTABLE_PARAMS_1);
+                             HAS_DEFAULT_MUTABLE_PARAMS_1, IS_CONST_TABLE_1);
     private static final PiTableModel P4_TABLE_MODEL_2 =
             new P4TableModel(PI_TABLE_ID_2, PI_TABLE_TYPE_2, P4_ACTION_PROFILE_MODEL_2, MAX_SIZE_2, COUNTERS_2,
                              METERS_2, SUPPORT_AGING_2, MATCH_FIELDS_2, ACTIONS_2, P4_ACTION_MODEL_DEFAULT_2,
-                             HAS_DEFAULT_MUTABLE_PARAMS_2);
+                             HAS_DEFAULT_MUTABLE_PARAMS_2, IS_CONST_TABLE_2);
 
     /* Packet operations */
     private static final PiPacketOperationType PI_PACKET_OPERATION_TYPE_1 = PiPacketOperationType.PACKET_IN;
@@ -315,11 +339,11 @@ public class P4PipelineModelTest {
                     .build();
 
     private static final PiPipelineModel P4_PIPELINE_MODEL_1 =
-            new P4PipelineModel(TABLES_1, COUNTERS_1, METERS_1, ACTION_PROFILES_1, PACKET_OPERATIONS_1);
+            new P4PipelineModel(TABLES_1, COUNTERS_1, METERS_1, REGISTERS_1, ACTION_PROFILES_1, PACKET_OPERATIONS_1);
     private static final PiPipelineModel SAME_AS_P4_PIPELINE_MODEL_1 =
-            new P4PipelineModel(TABLES_1, COUNTERS_1, METERS_1, ACTION_PROFILES_1, PACKET_OPERATIONS_1);
+            new P4PipelineModel(TABLES_1, COUNTERS_1, METERS_1, REGISTERS_1, ACTION_PROFILES_1, PACKET_OPERATIONS_1);
     private static final PiPipelineModel P4_PIPELINE_MODEL_2 =
-            new P4PipelineModel(TABLES_2, COUNTERS_2, METERS_2, ACTION_PROFILES_2, PACKET_OPERATIONS_2);
+            new P4PipelineModel(TABLES_2, COUNTERS_2, METERS_2, REGISTERS_1, ACTION_PROFILES_2, PACKET_OPERATIONS_2);
 
     /**
      * Checks that the P4PipelineModel class is immutable.

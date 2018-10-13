@@ -65,34 +65,38 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
 
         // in port vlan flow rule
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
-        FlowRule flowRuleExpected = buildExpectedVlanInPortRule(PORT_1,
-                                                                VlanId.NONE,
-                                                                VLAN_100,
-                                                                FabricConstants.TBL_INGRESS_PORT_VLAN_ID);
+        FlowRule flowRuleExpected =
+                buildExpectedVlanInPortRule(PORT_1,
+                                            VlanId.NONE,
+                                            VLAN_100,
+                                            FabricConstants.FABRIC_INGRESS_FILTERING_INGRESS_PORT_VLAN);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // forwarding classifier ipv4
         actualFlowRule = flowRulesInstalled.get(1);
         flowRuleExpected = buildExpectedFwdClassifierRule(PORT_1,
                                                           ROUTER_MAC,
+                                                          null,
                                                           Ethernet.TYPE_IPV4,
-                                                          FWD_IPV4_UNICAST);
+                                                          FabricFilteringPipeliner.FWD_IPV4_ROUTING);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // forwarding classifier ipv6
         actualFlowRule = flowRulesInstalled.get(2);
         flowRuleExpected = buildExpectedFwdClassifierRule(PORT_1,
                                                           ROUTER_MAC,
+                                                          null,
                                                           Ethernet.TYPE_IPV6,
-                                                          FWD_IPV6_UNICAST);
+                                                          FabricFilteringPipeliner.FWD_IPV6_ROUTING);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // forwarding classifier mpls
         actualFlowRule = flowRulesInstalled.get(3);
         flowRuleExpected = buildExpectedFwdClassifierRule(PORT_1,
                                                           ROUTER_MAC,
+                                                          null,
                                                           Ethernet.MPLS_UNICAST,
-                                                          FWD_MPLS);
+                                                          FabricFilteringPipeliner.FWD_MPLS);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
     }
 
@@ -111,7 +115,7 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
                 .permit()
                 .withPriority(PRIORITY)
                 .withKey(Criteria.matchInPort(PORT_1))
-                .addCondition(Criteria.matchEthDst(MacAddress.IPV4_MULTICAST))
+                .addCondition(Criteria.matchEthDstMasked(MacAddress.IPV4_MULTICAST, MacAddress.IPV4_MULTICAST_MASK))
                 .addCondition(Criteria.matchVlanId(VlanId.NONE))
                 .withMeta(treatment)
                 .fromApp(APP_ID)
@@ -125,18 +129,20 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
 
         // in port vlan flow rule
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
-        FlowRule flowRuleExpected = buildExpectedVlanInPortRule(PORT_1,
-                                                                VlanId.NONE,
-                                                                VLAN_100,
-                                                                FabricConstants.TBL_INGRESS_PORT_VLAN_ID);
+        FlowRule flowRuleExpected =
+                buildExpectedVlanInPortRule(PORT_1,
+                                            VlanId.NONE,
+                                            VLAN_100,
+                                            FabricConstants.FABRIC_INGRESS_FILTERING_INGRESS_PORT_VLAN);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // forwarding classifier
         actualFlowRule = flowRulesInstalled.get(1);
         flowRuleExpected = buildExpectedFwdClassifierRule(PORT_1,
                                                           MacAddress.IPV4_MULTICAST,
+                                                          MacAddress.IPV4_MULTICAST_MASK,
                                                           Ethernet.TYPE_IPV4,
-                                                          FWD_IPV4_MULTICAST);
+                                                          FabricFilteringPipeliner.FWD_IPV4_ROUTING);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
     }
 
@@ -155,7 +161,7 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
                 .permit()
                 .withPriority(PRIORITY)
                 .withKey(Criteria.matchInPort(PORT_1))
-                .addCondition(Criteria.matchEthDst(MacAddress.IPV6_MULTICAST))
+                .addCondition(Criteria.matchEthDstMasked(MacAddress.IPV6_MULTICAST, MacAddress.IPV6_MULTICAST_MASK))
                 .addCondition(Criteria.matchVlanId(VlanId.NONE))
                 .withMeta(treatment)
                 .fromApp(APP_ID)
@@ -169,18 +175,20 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
 
         // in port vlan flow rule
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
-        FlowRule flowRuleExpected = buildExpectedVlanInPortRule(PORT_1,
-                                                                VlanId.NONE,
-                                                                VLAN_100,
-                                                                FabricConstants.TBL_INGRESS_PORT_VLAN_ID);
+        FlowRule flowRuleExpected =
+                buildExpectedVlanInPortRule(PORT_1,
+                                            VlanId.NONE,
+                                            VLAN_100,
+                                            FabricConstants.FABRIC_INGRESS_FILTERING_INGRESS_PORT_VLAN);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // forwarding classifier
         actualFlowRule = flowRulesInstalled.get(1);
         flowRuleExpected = buildExpectedFwdClassifierRule(PORT_1,
                                                           MacAddress.IPV6_MULTICAST,
+                                                          MacAddress.IPV6_MULTICAST_MASK,
                                                           Ethernet.TYPE_IPV6,
-                                                          FWD_IPV6_MULTICAST);
+                                                          FabricFilteringPipeliner.FWD_IPV6_ROUTING);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
     }
 
@@ -200,10 +208,11 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
 
         // in port vlan flow rule
         FlowRule actualFlowRule = flowRulesInstalled.get(0);
-        FlowRule flowRuleExpected = buildExpectedVlanInPortRule(PORT_1,
-                                                                VlanId.NONE,
-                                                                VLAN_100,
-                                                                FabricConstants.TBL_INGRESS_PORT_VLAN_ID);
+        FlowRule flowRuleExpected =
+                buildExpectedVlanInPortRule(PORT_1,
+                                            VlanId.NONE,
+                                            VLAN_100,
+                                            FabricConstants.FABRIC_INGRESS_FILTERING_INGRESS_PORT_VLAN);
         assertTrue(flowRuleExpected.exactMatch(actualFlowRule));
 
         // No rules in forwarding classifier, will do default action: set fwd type to bridging
@@ -325,17 +334,23 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
 
     private FlowRule buildExpectedFwdClassifierRule(PortNumber inPort,
                                                     MacAddress dstMac,
+                                                    MacAddress dstMacMask,
                                                     short ethType,
                                                     byte fwdClass) {
-        TrafficSelector selector = DefaultTrafficSelector.builder()
-                .matchEthDst(dstMac)
+        TrafficSelector.Builder sbuilder = DefaultTrafficSelector.builder()
                 .matchInPort(inPort)
-                .matchEthType(ethType)
-                .build();
-        PiActionParam classParam = new PiActionParam(FabricConstants.ACT_PRM_FWD_TYPE_ID,
+                .matchEthType(ethType);
+        if (dstMacMask != null) {
+            sbuilder.matchEthDstMasked(dstMac, dstMacMask);
+        } else {
+            sbuilder.matchEthDstMasked(dstMac, MacAddress.EXACT_MASK);
+        }
+        TrafficSelector selector = sbuilder.build();
+
+        PiActionParam classParam = new PiActionParam(FabricConstants.FWD_TYPE,
                                                      ImmutableByteSequence.copyFrom(fwdClass));
         PiAction fwdClassifierAction = PiAction.builder()
-                .withId(FabricConstants.ACT_FILTERING_SET_FORWARDING_TYPE_ID)
+                .withId(FabricConstants.FABRIC_INGRESS_FILTERING_SET_FORWARDING_TYPE)
                 .withParameter(classParam)
                 .build();
         TrafficTreatment treatment = DefaultTrafficTreatment.builder()
@@ -349,7 +364,7 @@ public class FabricFilteringPipelinerTest extends FabricPipelinerTest {
                 .fromApp(APP_ID)
                 .forDevice(DEVICE_ID)
                 .makePermanent()
-                .forTable(FabricConstants.TBL_FWD_CLASSIFIER_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FILTERING_FWD_CLASSIFIER)
                 .build();
     }
 }

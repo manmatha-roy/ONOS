@@ -16,10 +16,14 @@
 
 package org.onosproject.pipelines.fabric.pipeliner;
 
+import com.google.common.base.MoreObjects;
+import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import org.onlab.util.KryoNamespace;
+import org.onlab.util.Tools;
+import org.onosproject.core.GroupId;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.PortNumber;
 import org.onosproject.net.behaviour.NextGroup;
@@ -27,9 +31,9 @@ import org.onosproject.net.behaviour.Pipeliner;
 import org.onosproject.net.behaviour.PipelinerContext;
 import org.onosproject.net.driver.AbstractHandlerBehaviour;
 import org.onosproject.net.driver.Driver;
+import org.onosproject.net.flow.FlowId;
 import org.onosproject.net.flow.FlowRule;
 import org.onosproject.net.flow.FlowRuleOperations;
-import org.onosproject.net.flow.FlowRuleOperationsContext;
 import org.onosproject.net.flow.FlowRuleService;
 import org.onosproject.net.flow.instructions.Instruction;
 import org.onosproject.net.flow.instructions.Instructions;
@@ -39,10 +43,8 @@ import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.flowobjective.NextObjective;
 import org.onosproject.net.flowobjective.Objective;
 import org.onosproject.net.flowobjective.ObjectiveError;
-import org.onosproject.net.group.Group;
 import org.onosproject.net.group.GroupDescription;
 import org.onosproject.net.group.GroupEvent;
-import org.onosproject.net.group.GroupListener;
 import org.onosproject.net.group.GroupService;
 import org.onosproject.store.serializers.KryoNamespaces;
 import org.slf4j.Logger;
@@ -50,11 +52,11 @@ import org.slf4j.Logger;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -71,23 +73,22 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
             .register(FabricNextGroup.class)
             .build("FabricPipeliner");
 
-    // TODO: make this configurable
-    private static final long DEFAULT_INSTALLATION_TIME_OUT = 40;
-    private static final Map<Objective.Operation, GroupEvent.Type> OBJ_OP_TO_GRP_EVENT_TYPE =
-            ImmutableMap.<Objective.Operation, GroupEvent.Type>builder()
-                    .put(Objective.Operation.ADD, GroupEvent.Type.GROUP_ADDED)
-                    .put(Objective.Operation.ADD_TO_EXISTING, GroupEvent.Type.GROUP_UPDATED)
-                    .put(Objective.Operation.REMOVE, GroupEvent.Type.GROUP_REMOVED)
-                    .put(Objective.Operation.REMOVE_FROM_EXISTING, GroupEvent.Type.GROUP_UPDATED)
-            .build();
+    private static final int NUM_CALLBACK_THREAD = 2;
 
     protected DeviceId deviceId;
     protected FlowRuleService flowRuleService;
     protected GroupService groupService;
     protected FlowObjectiveStore flowObjectiveStore;
-    protected FabricFilteringPipeliner pipelinerFilter;
-    protected FabricForwardingPipeliner pipelinerForward;
-    protected FabricNextPipeliner pipelinerNext;
+    FabricFilteringPipeliner pipelinerFilter;
+    FabricForwardingPipeliner pipelinerForward;
+    FabricNextPipeliner pipelinerNext;
+
+    private Map<PendingFlowKey, PendingInstallObjective> pendingInstallObjectiveFlows = new ConcurrentHashMap<>();
+    private Map<PendingGroupKey, PendingInstallObjective> pendingInstallObjectiveGroups = new ConcurrentHashMap<>();
+    private Map<Objective, PendingInstallObjective> pendingInstallObjectives = Maps.newConcurrentMap();
+
+    private static ExecutorService flowObjCallbackExecutor =
+            Executors.newFixedThreadPool(NUM_CALLBACK_THREAD, Tools.groupedThreads("fabric-pipeliner", "cb-", log));
 
 
     @Override
@@ -110,11 +111,12 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
             return;
         }
 
-        applyTranslationResult(filterObjective, result, success -> {
-            if (success) {
+        applyTranslationResult(filterObjective, result, error -> {
+            if (error == null) {
                 success(filterObjective);
             } else {
-                fail(filterObjective, ObjectiveError.FLOWINSTALLATIONFAILED);
+                log.info("Ignore error {}. Let flow subsystem retry", error);
+                success(filterObjective);
             }
         });
     }
@@ -127,11 +129,12 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
             return;
         }
 
-        applyTranslationResult(forwardObjective, result, success -> {
-            if (success) {
+        applyTranslationResult(forwardObjective, result, error -> {
+            if (error == null) {
                 success(forwardObjective);
             } else {
-                fail(forwardObjective, ObjectiveError.FLOWINSTALLATIONFAILED);
+                log.info("Ignore error {}. Let flow subsystem retry", error);
+                success(forwardObjective);
             }
         });
     }
@@ -152,29 +155,43 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
             return;
         }
 
-        applyTranslationResult(nextObjective, result, success -> {
-            if (!success) {
-                fail(nextObjective, ObjectiveError.GROUPINSTALLATIONFAILED);
+        if (nextObjective.op() == Objective.Operation.MODIFY) {
+            // TODO: support MODIFY operation
+            log.debug("Currently we don't support MODIFY operation, return failure directly to the context");
+            fail(nextObjective, ObjectiveError.UNSUPPORTED);
+            return;
+        }
+
+        applyTranslationResult(nextObjective, result, error -> {
+            if (error != null) {
+                log.info("Ignore error {}. Let flow/group subsystem retry", error);
+                success(nextObjective);
                 return;
             }
 
-            // Success, put next group to objective store
-            List<PortNumber> portNumbers = Lists.newArrayList();
-            nextObjective.next().forEach(treatment -> {
-                Instructions.OutputInstruction outputInst = treatment.allInstructions()
-                        .stream()
-                        .filter(inst -> inst.type() == Instruction.Type.OUTPUT)
-                        .map(inst -> (Instructions.OutputInstruction) inst)
-                        .findFirst()
-                        .orElse(null);
-
-                if (outputInst != null) {
-                    portNumbers.add(outputInst.port());
+            if (nextObjective.op() == Objective.Operation.REMOVE) {
+                if (flowObjectiveStore.getNextGroup(nextObjective.id()) == null) {
+                    log.warn("Can not find next obj {} from store", nextObjective.id());
+                    return;
                 }
-            });
-            FabricNextGroup nextGroup = new FabricNextGroup(nextObjective.type(),
-                                                            portNumbers);
-            flowObjectiveStore.putNextGroup(nextObjective.id(), nextGroup);
+                flowObjectiveStore.removeNextGroup(nextObjective.id());
+            } else {
+                // Success, put next group to objective store
+                List<PortNumber> portNumbers = Lists.newArrayList();
+                nextObjective.next().forEach(treatment ->
+                        treatment.allInstructions()
+                                .stream()
+                                .filter(inst -> inst.type() == Instruction.Type.OUTPUT)
+                                .map(inst -> (Instructions.OutputInstruction) inst)
+                                .findFirst()
+                                .map(Instructions.OutputInstruction::port)
+                                .ifPresent(portNumbers::add)
+                );
+                FabricNextGroup nextGroup = new FabricNextGroup(nextObjective.type(),
+                                                                portNumbers);
+                flowObjectiveStore.putNextGroup(nextObjective.id(), nextGroup);
+            }
+
             success(nextObjective);
         });
     }
@@ -192,80 +209,55 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
 
     private void applyTranslationResult(Objective objective,
                                         PipelinerTranslationResult result,
-                                        Consumer<Boolean> callback) {
+                                        Consumer<ObjectiveError> callback) {
         Collection<GroupDescription> groups = result.groups();
         Collection<FlowRule> flowRules = result.flowRules();
-        CompletableFuture.supplyAsync(() -> installGroups(objective, groups))
-                .thenApplyAsync(groupSuccess -> groupSuccess && installFlows(objective, flowRules))
-                .thenAcceptAsync(callback)
-                .exceptionally((ex) -> {
-                    log.warn("Got unexpected exception while applying translation result {}: {}",
-                             result, ex);
-                    fail(objective, ObjectiveError.UNKNOWN);
-                    return null;
-                });
-    }
 
-    private boolean installFlows(Objective objective, Collection<FlowRule> flowRules) {
-        if (flowRules.isEmpty()) {
-            return true;
-        }
-        CompletableFuture<Boolean> flowInstallFuture = new CompletableFuture<>();
-        FlowRuleOperationsContext ctx = new FlowRuleOperationsContext() {
-            @Override
-            public void onSuccess(FlowRuleOperations ops) {
-                flowInstallFuture.complete(true);
-            }
-
-            @Override
-            public void onError(FlowRuleOperations ops) {
-                log.warn("Failed to install flow rules: {}", flowRules);
-                flowInstallFuture.complete(false);
-            }
-        };
-
-        FlowRuleOperations ops = buildFlowRuleOps(objective, flowRules, ctx);
-        flowRuleService.apply(ops);
-
-        try {
-            return flowInstallFuture.get(DEFAULT_INSTALLATION_TIME_OUT, TimeUnit.SECONDS);
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            log.warn("Got exception while installing flows:{}", e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean installGroups(Objective objective, Collection<GroupDescription> groups) {
-        if (groups.isEmpty()) {
-            return true;
-        }
-        Collection<Integer> groupIds = groups.stream()
-                .map(GroupDescription::givenGroupId)
+        Set<FlowId> flowIds = flowRules.stream().map(FlowRule::id).collect(Collectors.toSet());
+        Set<PendingGroupKey> pendingGroupKeys = groups.stream().map(GroupDescription::givenGroupId)
+                .map(GroupId::new)
+                .map(gid -> new PendingGroupKey(gid, objective.op()))
                 .collect(Collectors.toSet());
 
-        int numGroupsToBeInstalled = groups.size();
-        CompletableFuture<Boolean> groupInstallFuture = new CompletableFuture<>();
-        AtomicInteger numGroupsInstalled = new AtomicInteger(0);
+        PendingInstallObjective pio =
+                new PendingInstallObjective(objective, flowIds, pendingGroupKeys, callback);
 
-        GroupListener listener = new GroupListener() {
-            @Override
-            public void event(GroupEvent event) {
-                log.debug("Receive group event for group {}", event.subject());
-                int currentNumGroupInstalled = numGroupsInstalled.incrementAndGet();
-                if (currentNumGroupInstalled == numGroupsToBeInstalled) {
-                    // install completed
-                    groupService.removeListener(this);
-                    groupInstallFuture.complete(true);
-                }
-            }
-            @Override
-            public boolean isRelevant(GroupEvent event) {
-                Group group = event.subject();
-                return groupIds.contains(group.givenGroupId());
-            }
-        };
+        flowIds.forEach(flowId -> {
+            PendingFlowKey pfk = new PendingFlowKey(flowId, objective.id());
+            pendingInstallObjectiveFlows.put(pfk, pio);
+        });
 
-        groupService.addListener(listener);
+        pendingGroupKeys.forEach(pendingGroupKey ->
+            pendingInstallObjectiveGroups.put(pendingGroupKey, pio)
+        );
+
+        pendingInstallObjectives.put(objective, pio);
+        installGroups(objective, groups);
+        installFlows(objective, flowRules);
+    }
+
+    private void installFlows(Objective objective, Collection<FlowRule> flowRules) {
+        if (flowRules.isEmpty()) {
+            return;
+        }
+
+        FlowRuleOperations ops = buildFlowRuleOps(objective, flowRules);
+        flowRuleService.apply(ops);
+
+        flowRules.forEach(flow -> {
+            PendingFlowKey pfk = new PendingFlowKey(flow.id(), objective.id());
+            PendingInstallObjective pio = pendingInstallObjectiveFlows.remove(pfk);
+
+            if (pio != null) {
+                pio.flowInstalled(flow.id());
+            }
+        });
+    }
+
+    private void installGroups(Objective objective, Collection<GroupDescription> groups) {
+        if (groups.isEmpty()) {
+            return;
+        }
 
         switch (objective.op()) {
             case ADD:
@@ -275,74 +267,72 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
                 groups.forEach(group -> groupService.removeGroup(deviceId, group.appCookie(), objective.appId()));
                 break;
             case ADD_TO_EXISTING:
-                groups.forEach(group -> {
-                    groupService.addBucketsToGroup(deviceId, group.appCookie(),
-                                                   group.buckets(),
-                                                   group.appCookie(),
-                                                   group.appId());
-                });
+                groups.forEach(group -> groupService.addBucketsToGroup(deviceId, group.appCookie(),
+                        group.buckets(), group.appCookie(), group.appId())
+                );
                 break;
             case REMOVE_FROM_EXISTING:
-                groups.forEach(group -> {
-                    groupService.removeBucketsFromGroup(deviceId, group.appCookie(),
-                                                        group.buckets(),
-                                                        group.appCookie(),
-                                                        group.appId());
-                });
+                groups.forEach(group -> groupService.removeBucketsFromGroup(deviceId, group.appCookie(),
+                        group.buckets(), group.appCookie(), group.appId())
+                );
                 break;
             default:
                 log.warn("Unsupported objective operation {}", objective.op());
-                groupService.removeListener(listener);
+                return;
         }
-        try {
-            return groupInstallFuture.get(DEFAULT_INSTALLATION_TIME_OUT, TimeUnit.SECONDS);
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            groupService.removeListener(listener);
-            log.warn("Got exception while installing groups: {}", e.getMessage());
-            return false;
-        }
+
+        groups.forEach(group -> {
+            PendingGroupKey pendingGroupKey = new PendingGroupKey(new GroupId(group.givenGroupId()), objective.op());
+            PendingInstallObjective pio = pendingInstallObjectiveGroups.remove(pendingGroupKey);
+            pio.groupInstalled(pendingGroupKey);
+        });
+
     }
 
-    static void fail(Objective objective, ObjectiveError error) {
-        objective.context().ifPresent(ctx -> ctx.onError(objective, error));
+    private static void fail(Objective objective, ObjectiveError error) {
+        CompletableFuture.runAsync(() -> objective.context().ifPresent(ctx -> ctx.onError(objective, error)),
+                flowObjCallbackExecutor);
+
     }
 
-    static void success(Objective objective) {
-        objective.context().ifPresent(ctx -> ctx.onSuccess(objective));
+    private static void success(Objective objective) {
+        CompletableFuture.runAsync(() -> objective.context().ifPresent(ctx -> ctx.onSuccess(objective)),
+                flowObjCallbackExecutor);
     }
 
-    static FlowRuleOperations buildFlowRuleOps(Objective objective, Collection<FlowRule> flowRules,
-                                               FlowRuleOperationsContext ctx) {
+    private static FlowRuleOperations buildFlowRuleOps(Objective objective, Collection<FlowRule> flowRules) {
         FlowRuleOperations.Builder ops = FlowRuleOperations.builder();
         switch (objective.op()) {
             case ADD:
+            case ADD_TO_EXISTING: // For egress VLAN
                 flowRules.forEach(ops::add);
                 break;
             case REMOVE:
+            case REMOVE_FROM_EXISTING: // For egress VLAN
                 flowRules.forEach(ops::remove);
                 break;
             default:
-                log.warn("Unsupported op {} for {}", objective);
+                log.warn("Unsupported op {} for {}", objective.op(), objective);
                 fail(objective, ObjectiveError.BADPARAMS);
                 return null;
         }
-        return ops.build(ctx);
+        return ops.build();
     }
 
     class FabricNextGroup implements NextGroup {
         private NextObjective.Type type;
         private Collection<PortNumber> outputPorts;
 
-        public FabricNextGroup(NextObjective.Type type, Collection<PortNumber> outputPorts) {
+        FabricNextGroup(NextObjective.Type type, Collection<PortNumber> outputPorts) {
             this.type = type;
             this.outputPorts = ImmutableList.copyOf(outputPorts);
         }
 
-        public NextObjective.Type type() {
+        NextObjective.Type type() {
             return type;
         }
 
-        public Collection<PortNumber> outputPorts() {
+        Collection<PortNumber> outputPorts() {
             return outputPorts;
         }
 
@@ -352,4 +342,167 @@ public class FabricPipeliner  extends AbstractHandlerBehaviour implements Pipeli
         }
     }
 
+    class PendingInstallObjective {
+        Objective objective;
+        Collection<FlowId> flowIds;
+        Collection<PendingGroupKey> pendingGroupKeys;
+        Consumer<ObjectiveError> callback;
+
+        PendingInstallObjective(Objective objective, Collection<FlowId> flowIds,
+                                       Collection<PendingGroupKey> pendingGroupKeys,
+                                       Consumer<ObjectiveError> callback) {
+            this.objective = objective;
+            this.flowIds = flowIds;
+            this.pendingGroupKeys = pendingGroupKeys;
+            this.callback = callback;
+        }
+
+        void flowInstalled(FlowId flowId) {
+            synchronized (this) {
+                flowIds.remove(flowId);
+                checkIfFinished();
+            }
+        }
+
+        void groupInstalled(PendingGroupKey pendingGroupKey) {
+            synchronized (this) {
+                pendingGroupKeys.remove(pendingGroupKey);
+                checkIfFinished();
+            }
+        }
+
+        private void checkIfFinished() {
+            if (flowIds.isEmpty() && pendingGroupKeys.isEmpty()) {
+                pendingInstallObjectives.remove(objective);
+                callback.accept(null);
+            }
+        }
+
+        void failed(Objective obj, ObjectiveError error) {
+            flowIds.forEach(flowId -> {
+                PendingFlowKey pfk = new PendingFlowKey(flowId, obj.id());
+                pendingInstallObjectiveFlows.remove(pfk);
+            });
+            pendingGroupKeys.forEach(pendingInstallObjectiveGroups::remove);
+            pendingInstallObjectives.remove(objective);
+            callback.accept(error);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PendingInstallObjective pio = (PendingInstallObjective) o;
+            return Objects.equal(objective, pio.objective) &&
+                    Objects.equal(flowIds, pio.flowIds) &&
+                    Objects.equal(pendingGroupKeys, pio.pendingGroupKeys) &&
+                    Objects.equal(callback, pio.callback);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(objective, flowIds, pendingGroupKeys, callback);
+        }
+
+        @Override
+        public String toString() {
+            return MoreObjects.toStringHelper(this)
+                    .add("obj", objective)
+                    .add("flowIds", flowIds)
+                    .add("pendingGroupKeys", pendingGroupKeys)
+                    .add("callback", callback)
+                    .toString();
+        }
+    }
+
+    class PendingFlowKey {
+        private FlowId flowId;
+        private int objId;
+
+        PendingFlowKey(FlowId flowId, int objId) {
+            this.flowId = flowId;
+            this.objId = objId;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PendingFlowKey pendingFlowKey = (PendingFlowKey) o;
+            return Objects.equal(flowId, pendingFlowKey.flowId) &&
+                    objId == pendingFlowKey.objId;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(flowId, objId);
+        }
+
+        @Override
+        public String toString() {
+            return MoreObjects.toStringHelper(this)
+                    .add("flowId", flowId)
+                    .add("objId", objId)
+                    .toString();
+        }
+    }
+
+    class PendingGroupKey {
+        private GroupId groupId;
+        private GroupEvent.Type expectedEventType;
+
+        PendingGroupKey(GroupId groupId, NextObjective.Operation objOp) {
+            this.groupId = groupId;
+
+            switch (objOp) {
+                case ADD:
+                    expectedEventType = GroupEvent.Type.GROUP_ADDED;
+                    break;
+                case REMOVE:
+                    expectedEventType = GroupEvent.Type.GROUP_REMOVED;
+                    break;
+                case MODIFY:
+                case ADD_TO_EXISTING:
+                case REMOVE_FROM_EXISTING:
+                    expectedEventType = GroupEvent.Type.GROUP_UPDATED;
+                    break;
+                default:
+                    expectedEventType = null;
+            }
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PendingGroupKey pendingGroupKey = (PendingGroupKey) o;
+            return Objects.equal(groupId, pendingGroupKey.groupId) &&
+                    expectedEventType == pendingGroupKey.expectedEventType;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(groupId, expectedEventType);
+        }
+
+        @Override
+        public String toString() {
+            return MoreObjects.toStringHelper(this)
+                    .add("groupId", groupId)
+                    .add("expectedEventType", expectedEventType)
+                    .toString();
+        }
+    }
 }

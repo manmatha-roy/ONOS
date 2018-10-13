@@ -17,6 +17,7 @@
 package org.onosproject.pipelines.fabric.pipeliner;
 
 import org.junit.Before;
+import org.junit.Test;
 import org.onlab.junit.TestUtils;
 import org.onlab.osgi.ServiceDirectory;
 import org.onlab.packet.IpPrefix;
@@ -30,7 +31,10 @@ import org.onosproject.net.PortNumber;
 import org.onosproject.net.behaviour.PipelinerContext;
 import org.onosproject.net.driver.Driver;
 import org.onosproject.net.driver.DriverHandler;
+import org.onosproject.net.flow.DefaultTrafficSelector;
+import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.criteria.PiCriterion;
+import org.onosproject.net.group.GroupService;
 import org.onosproject.pipelines.fabric.FabricConstants;
 import org.onosproject.pipelines.fabric.FabricInterpreter;
 
@@ -38,7 +42,7 @@ import static org.easymock.EasyMock.createNiceMock;
 import static org.easymock.EasyMock.expect;
 import static org.easymock.EasyMock.replay;
 
-public abstract class FabricPipelinerTest {
+public class FabricPipelinerTest {
     static final ApplicationId APP_ID = TestApplicationId.create("FabricPipelinerTest");
     static final DeviceId DEVICE_ID = DeviceId.deviceId("device:bmv2:11");
     static final int PRIORITY = 100;
@@ -53,26 +57,15 @@ public abstract class FabricPipelinerTest {
     static final IpPrefix IPV6_MCAST_ADDR = IpPrefix.valueOf("ff00::1/32");
     static final MplsLabel MPLS_10 = MplsLabel.mplsLabel(10);
     static final Integer NEXT_ID_1 = 1;
-
-    // Forwarding types
-    static final byte FWD_BRIDGING = 0;
-    static final byte FWD_MPLS = 1;
-    static final byte FWD_IPV4_UNICAST = 2;
-    static final byte FWD_IPV4_MULTICAST = 3;
-    static final byte FWD_IPV6_UNICAST = 4;
-    static final byte FWD_IPV6_MULTICAST = 5;
-
-    // Next types
-    static final byte NEXT_TYPE_SIMPLE = 0;
-    static final byte NEXT_TYPE_HASHED = 1;
-    static final byte NEXT_TYPE_BROADCAST = 2;
-    static final byte NEXT_TYPE_PUNT = 3;
+    static final TrafficSelector VLAN_META = DefaultTrafficSelector.builder()
+            .matchVlanId(VLAN_100)
+            .build();
 
     static final PiCriterion VLAN_VALID = PiCriterion.builder()
-            .matchExact(FabricConstants.HF_VLAN_TAG_IS_VALID_ID, new byte[]{1})
+            .matchExact(FabricConstants.HDR_VLAN_TAG_IS_VALID, new byte[]{1})
             .build();
     static final PiCriterion VLAN_INVALID = PiCriterion.builder()
-            .matchExact(FabricConstants.HF_VLAN_TAG_IS_VALID_ID, new byte[]{0})
+            .matchExact(FabricConstants.HDR_VLAN_TAG_IS_VALID, new byte[]{0})
             .build();
 
     FabricPipeliner pipeliner;
@@ -82,6 +75,7 @@ public abstract class FabricPipelinerTest {
     public void setup() {
         pipeliner = new FabricPipeliner();
 
+        GroupService mockGroupService = createNiceMock(GroupService.class);
         ServiceDirectory serviceDirectory = createNiceMock(ServiceDirectory.class);
         PipelinerContext pipelinerContext = createNiceMock(PipelinerContext.class);
         DriverHandler driverHandler = createNiceMock(DriverHandler.class);
@@ -90,10 +84,17 @@ public abstract class FabricPipelinerTest {
         expect(mockDriver.getProperty("noHashedTable")).andReturn("false").anyTimes();
         expect(driverHandler.driver()).andReturn(mockDriver).anyTimes();
         expect(pipelinerContext.directory()).andReturn(serviceDirectory).anyTimes();
+        expect(serviceDirectory.get(GroupService.class)).andReturn(mockGroupService).anyTimes();
         replay(serviceDirectory, pipelinerContext, driverHandler, mockDriver);
         TestUtils.setField(pipeliner, "handler", driverHandler);
 
         pipeliner.init(DEVICE_ID, pipelinerContext);
         interpreter = new FabricInterpreter();
+    }
+
+    @Test
+    public void fakeTest() {
+        // Needed otherwise Bazel complains about a test class without test cases.
+        assert true;
     }
 }

@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.onosproject</groupId>
         <artifactId>onos</artifactId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>onos-apps</artifactId>
@@ -69,6 +69,10 @@
         <module>vpls</module>
         <module>openstacknode</module>
         <module>openstacknetworking</module>
+        <module>openstacknetworkingui</module>
+        <module>openstacktelemetry</module>
+        <module>openstacktroubleshoot</module>
+        <module>openstackvtap</module>
         <module>influxdbmetrics</module>
         <module>gangliametrics</module>
         <module>graphitemetrics</module>
@@ -96,11 +100,16 @@
         <module>route-service</module>
         <module>evpn-route-service</module>
         <module>l3vpn</module>
-        <module>openstacknetworkingui</module>
         <module>cfm</module>
         <module>routeradvertisement</module>
-        <module>t3</module>
         <module>simplefabric</module>
+        <module>odtn</module>
+        <module>mcast</module>
+        <module>layout</module>
+        <module>imr</module>
+        <module>t3</module>
+        <module>nodemetrics</module>
+        <module>inbandtelemetry</module>
     </modules>
 
     <properties>

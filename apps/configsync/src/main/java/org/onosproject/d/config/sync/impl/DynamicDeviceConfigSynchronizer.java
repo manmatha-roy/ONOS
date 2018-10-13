@@ -66,7 +66,7 @@ import com.google.common.collect.ImmutableMap;
 
 /**
  * Component to bridge Dynamic Config store and the Device configuration state.
- * <p>
+ *
  * <ul>
  * <li> Propagate DynamicConfig service change downward to Device side via provider.
  * <li> Propagate Device triggered change event upward to DyamicConfig service.
@@ -224,7 +224,7 @@ public class DynamicDeviceConfigSynchronizer
             // FIXME hack for unconsolidated event bug
             quietUntil = System.currentTimeMillis() + quietPeriod.toMillis();
         } else {
-            log.warn("Ignored event's ResourceId: {}", event.subject());
+            log.info("Ignored event's ResourceId: {}", event.subject());
         }
     }
 

@@ -21,7 +21,7 @@
     <parent>
         <artifactId>onos-drivers-general</artifactId>
         <groupId>org.onosproject</groupId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -32,7 +32,7 @@
 
     <properties>
         <onos.app.name>org.onosproject.drivers.optical</onos.app.name>
-        <onos.app.origin>ON.Lab</onos.app.origin>
+        <onos.app.origin>ONOS Community</onos.app.origin>
         <onos.app.category>Drivers</onos.app.category>
         <onos.app.title>Other optical Device Drivers</onos.app.title>
         <onos.app.url>http://onosproject.org</onos.app.url>

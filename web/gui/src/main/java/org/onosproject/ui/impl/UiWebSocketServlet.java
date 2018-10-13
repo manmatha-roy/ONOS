@@ -16,6 +16,8 @@
 package org.onosproject.ui.impl;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import org.eclipse.jetty.websocket.WebSocket;
 import org.eclipse.jetty.websocket.WebSocketServlet;
 import org.onlab.osgi.DefaultServiceDirectory;
@@ -24,8 +26,6 @@ import org.onlab.osgi.ServiceDirectory;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import java.security.Principal;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -40,12 +40,12 @@ public class UiWebSocketServlet extends WebSocketServlet {
     private static UiWebSocketServlet instance;
     private static final Object INSTANCE_LOCK = new Object();
 
-    private ServiceDirectory directory = new DefaultServiceDirectory();
+    private static ServiceDirectory directory = new DefaultServiceDirectory();
 
-    private final Set<UiWebSocket> sockets = new HashSet<>();
+    private final Set<UiWebSocket> sockets = Sets.newConcurrentHashSet();
     private final Timer timer = new Timer();
     private final TimerTask pruner = new Pruner();
-    private boolean isStopped = false;
+    private static boolean isStopped = false;
 
     /**
      * Closes all currently open UI web-sockets.
@@ -53,7 +53,7 @@ public class UiWebSocketServlet extends WebSocketServlet {
     public static void closeAll() {
         synchronized (INSTANCE_LOCK) {
             if (instance != null) {
-                instance.isStopped = true;
+                isStopped = true;
                 instance.sockets.forEach(UiWebSocket::close);
                 instance.sockets.clear();
                 instance.pruner.cancel();
@@ -82,9 +82,7 @@ public class UiWebSocketServlet extends WebSocketServlet {
         String userName = p != null ? p.getName() : FAKE_USERNAME;
 
         UiWebSocket socket = new UiWebSocket(directory, userName);
-        synchronized (sockets) {
-            sockets.add(socket);
-        }
+        sockets.add(socket);
         return socket;
     }
 
@@ -125,16 +123,11 @@ public class UiWebSocketServlet extends WebSocketServlet {
     private class Pruner extends TimerTask {
         @Override
         public void run() {
-            synchronized (sockets) {
-                Iterator<UiWebSocket> it = sockets.iterator();
-                while (it.hasNext()) {
-                    UiWebSocket socket = it.next();
-                    if (socket.isIdle()) {
-                        it.remove();
-                        socket.close();
-                    }
-                }
-            }
+            ImmutableSet<UiWebSocket> set = ImmutableSet.copyOf(sockets);
+            set.stream().filter(UiWebSocket::isIdle).forEach(s -> {
+                sockets.remove(s);
+                s.close();
+            });
         }
     }
 }

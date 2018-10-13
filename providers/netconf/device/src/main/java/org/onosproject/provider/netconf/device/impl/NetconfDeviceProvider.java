@@ -356,9 +356,14 @@ public class NetconfDeviceProvider extends AbstractProvider
                         Port port = deviceService.getPort(deviceId, portNumber);
                         //rebuilding port description with admin state changed.
                         providerService.portStatusChanged(deviceId,
-                                new DefaultPortDescription(portNumber, enable, false,
-                                        port.type(), port.portSpeed(),
-                                        (SparseAnnotations) port.annotations()));
+                                DefaultPortDescription.builder()
+                                        .withPortNumber(portNumber)
+                                        .isEnabled(enable)
+                                        .isRemoved(false)
+                                        .type(port.type())
+                                        .portSpeed(port.portSpeed())
+                                        .annotations((SparseAnnotations) port.annotations())
+                                        .build());
                     } else {
                         log.warn("Your device {} port {} status can't be changed to {}",
                                 deviceId, portNumber, enable);
@@ -370,6 +375,12 @@ public class NetconfDeviceProvider extends AbstractProvider
         } else {
             log.debug("Not master but {}, not changing port state", mastershipService.getLocalRole(deviceId));
         }
+    }
+
+    @Override
+    public void triggerDisconnect(DeviceId deviceId) {
+        log.debug("Forcing disconnect for device {}", deviceId);
+        controller.disconnectDevice(deviceId, true);
     }
 
     private class InnerNetconfDeviceListener implements NetconfDeviceListener {
@@ -634,16 +645,14 @@ public class NetconfDeviceProvider extends AbstractProvider
     private class InternalDeviceListener implements DeviceListener {
         @Override
         public void event(DeviceEvent event) {
-            if ((event.type() == DeviceEvent.Type.DEVICE_ADDED)) {
-                executor.execute(() -> discoverPorts(event.subject().id()));
-            } else if ((event.type() == DeviceEvent.Type.DEVICE_REMOVED)) {
-                log.debug("removing device {}", event.subject().id());
-                controller.disconnectDevice(event.subject().id(), true);
-            }
+            executor.execute(() -> discoverPorts(event.subject().id()));
         }
 
         @Override
         public boolean isRelevant(DeviceEvent event) {
+            if (event.type() != DeviceEvent.Type.DEVICE_ADDED) {
+                return false;
+            }
             if (mastershipService.getMasterFor(event.subject().id()) == null) {
                 return true;
             }

@@ -16,7 +16,6 @@
 
 package org.onosproject.openstacknode.cli;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.google.common.collect.Lists;
@@ -27,6 +26,8 @@ import org.onosproject.openstacknode.api.OpenstackNodeService;
 
 import java.util.Comparator;
 import java.util.List;
+
+import static org.onosproject.openstacknode.util.OpenstackNodeUtil.prettyJson;
 
 /**
  * Lists all nodes registered to the service.
@@ -63,22 +64,12 @@ public class OpenstackNodeListCommand extends AbstractShellCommand {
         }
     }
 
-    private JsonNode json(List<OpenstackNode> osNodes) {
+    private String json(List<OpenstackNode> osNodes) {
         ObjectMapper mapper = new ObjectMapper();
         ArrayNode result = mapper.createArrayNode();
         for (OpenstackNode osNode : osNodes) {
-            result.add(mapper.createObjectNode()
-                    .put("hostname", osNode.hostname())
-                    .put("type", osNode.type().name())
-                    .put("integrationBridge", osNode.intgBridge().toString())
-                    .put("managementIp", osNode.managementIp().toString())
-                    .put("dataIp", osNode.dataIp().toString())
-                    .put("vlanIntf", osNode.vlanIntf())
-                    .put("tunnelPortNum", osNode.tunnelPortNum().toString())
-                    .put("vlanPortNum", osNode.vlanPortNum().toString())
-                    .put("uplinkPort", osNode.uplinkPort())
-                    .put("state", osNode.state().name()));
+            result.add(jsonForEntity(osNode, OpenstackNode.class));
         }
-        return result;
+        return prettyJson(mapper, result.toString());
     }
 }

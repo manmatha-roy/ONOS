@@ -37,18 +37,18 @@ import org.onosproject.net.pi.runtime.PiRangeFieldMatch;
 import org.onosproject.net.pi.runtime.PiTableAction;
 import org.onosproject.net.pi.runtime.PiTableEntry;
 import org.onosproject.net.pi.runtime.PiTernaryFieldMatch;
-import org.onosproject.net.pi.runtime.PiValidFieldMatch;
 import org.slf4j.Logger;
-import p4.P4RuntimeOuterClass.Action;
-import p4.P4RuntimeOuterClass.FieldMatch;
-import p4.P4RuntimeOuterClass.TableAction;
-import p4.P4RuntimeOuterClass.TableEntry;
-import p4.config.P4InfoOuterClass;
+import p4.config.v1.P4InfoOuterClass;
+import p4.v1.P4RuntimeOuterClass.Action;
+import p4.v1.P4RuntimeOuterClass.FieldMatch;
+import p4.v1.P4RuntimeOuterClass.TableAction;
+import p4.v1.P4RuntimeOuterClass.TableEntry;
 
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
 import static org.onlab.util.ImmutableByteSequence.copyFrom;
 import static org.onosproject.p4runtime.ctl.P4RuntimeUtils.assertPrefixLen;
@@ -73,23 +73,24 @@ final class TableEntryEncoder {
     }
 
     /**
-     * Returns a collection of P4Runtime table entry protobuf messages, encoded from the given collection of PI table
-     * entries for the given pipeconf. If a PI table entry cannot be encoded, it is skipped, hence the returned
-     * collection might have different size than the input one.
-     * <p>
-     * Please check the log for an explanation of any error that might have occurred.
+     * Returns a collection of P4Runtime table entry protobuf messages, encoded
+     * from the given collection of PI table entries for the given pipeconf. If
+     * a PI table entry cannot be encoded, an EncodeException is thrown.
      *
      * @param piTableEntries PI table entries
      * @param pipeconf       PI pipeconf
      * @return collection of P4Runtime table entry protobuf messages
+     * @throws EncodeException if a PI table entry cannot be encoded
      */
-    static Collection<TableEntry> encode(Collection<PiTableEntry> piTableEntries, PiPipeconf pipeconf) {
+    static List<TableEntry> encode(List<PiTableEntry> piTableEntries,
+                                                PiPipeconf pipeconf)
+            throws EncodeException {
 
         P4InfoBrowser browser = PipeconfHelper.getP4InfoBrowser(pipeconf);
 
         if (browser == null) {
-            log.error("Unable to get a P4Info browser for pipeconf {}, skipping encoding of all table entries");
-            return Collections.emptyList();
+            throw new EncodeException(format(
+                    "Unable to get a P4Info browser for pipeconf %s", pipeconf.id()));
         }
 
         ImmutableList.Builder<TableEntry> tableEntryMsgListBuilder = ImmutableList.builder();
@@ -97,8 +98,8 @@ final class TableEntryEncoder {
         for (PiTableEntry piTableEntry : piTableEntries) {
             try {
                 tableEntryMsgListBuilder.add(encodePiTableEntry(piTableEntry, browser));
-            } catch (P4InfoBrowser.NotFoundException | EncodeException e) {
-                log.error("Unable to encode PI table entry: {}", e.getMessage());
+            } catch (P4InfoBrowser.NotFoundException e) {
+                throw new EncodeException(e.getMessage());
             }
         }
 
@@ -136,7 +137,7 @@ final class TableEntryEncoder {
      * @param pipeconf       PI pipeconf
      * @return collection of PI table entry objects
      */
-    static Collection<PiTableEntry> decode(Collection<TableEntry> tableEntryMsgs, PiPipeconf pipeconf) {
+    static List<PiTableEntry> decode(List<TableEntry> tableEntryMsgs, PiPipeconf pipeconf) {
 
         P4InfoBrowser browser = PipeconfHelper.getP4InfoBrowser(pipeconf);
 
@@ -201,8 +202,12 @@ final class TableEntryEncoder {
         tableEntryMsgBuilder.setTableId(tableInfo.getPreamble().getId());
 
         // Field matches.
-        for (PiFieldMatch piFieldMatch : matchKey.fieldMatches()) {
-            tableEntryMsgBuilder.addMatch(encodePiFieldMatch(piFieldMatch, tableInfo, browser));
+        if (matchKey.equals(PiMatchKey.EMPTY)) {
+            tableEntryMsgBuilder.setIsDefaultAction(true);
+        } else {
+            for (PiFieldMatch piFieldMatch : matchKey.fieldMatches()) {
+                tableEntryMsgBuilder.addMatch(encodePiFieldMatch(piFieldMatch, tableInfo, browser));
+            }
         }
 
         return tableEntryMsgBuilder.build();
@@ -231,11 +236,17 @@ final class TableEntryEncoder {
         }
 
         // Table action.
-        tableEntryMsgBuilder.setAction(encodePiTableAction(piTableEntry.action(), browser));
+        if (piTableEntry.action() != null) {
+            tableEntryMsgBuilder.setAction(encodePiTableAction(piTableEntry.action(), browser));
+        }
 
         // Field matches.
-        for (PiFieldMatch piFieldMatch : piTableEntry.matchKey().fieldMatches()) {
-            tableEntryMsgBuilder.addMatch(encodePiFieldMatch(piFieldMatch, tableInfo, browser));
+        if (piTableEntry.matchKey().equals(PiMatchKey.EMPTY)) {
+            tableEntryMsgBuilder.setIsDefaultAction(true);
+        } else {
+            for (PiFieldMatch piFieldMatch : piTableEntry.matchKey().fieldMatches()) {
+                tableEntryMsgBuilder.addMatch(encodePiFieldMatch(piFieldMatch, tableInfo, browser));
+            }
         }
 
         return tableEntryMsgBuilder.build();
@@ -252,13 +263,17 @@ final class TableEntryEncoder {
         piTableEntryBuilder.forTable(PiTableId.of(tableInfo.getPreamble().getName()));
 
         // Priority.
-        piTableEntryBuilder.withPriority(tableEntryMsg.getPriority());
+        if (tableEntryMsg.getPriority() > 0) {
+            piTableEntryBuilder.withPriority(tableEntryMsg.getPriority());
+        }
 
         // Controller metadata (cookie)
         piTableEntryBuilder.withCookie(tableEntryMsg.getControllerMetadata());
 
         // Table action.
-        piTableEntryBuilder.withAction(decodeTableActionMsg(tableEntryMsg.getAction(), browser));
+        if (tableEntryMsg.hasAction()) {
+            piTableEntryBuilder.withAction(decodeTableActionMsg(tableEntryMsg.getAction(), browser));
+        }
 
         // Timeout.
         // FIXME: how to decode table entry messages with timeout, given that the timeout value is lost after encoding?
@@ -334,13 +349,6 @@ final class TableEntryEncoder {
                                 .setLow(rangeLowValue)
                                 .build())
                         .build();
-            case VALID:
-                PiValidFieldMatch validMatch = (PiValidFieldMatch) piFieldMatch;
-                return fieldMatchMsgBuilder.setValid(
-                        FieldMatch.Valid.newBuilder()
-                                .setValue(validMatch.isValid())
-                                .build())
-                        .build();
             default:
                 throw new EncodeException(format(
                         "Building of match type %s not implemented", piFieldMatch.type()));
@@ -360,10 +368,14 @@ final class TableEntryEncoder {
             throws P4InfoBrowser.NotFoundException, EncodeException {
         P4InfoBrowser browser = PipeconfHelper.getP4InfoBrowser(pipeconf);
         P4InfoOuterClass.Table tableInfo = browser.tables().getById(tableEntryMsg.getTableId());
-        return decodeFieldMatchMsgs(tableEntryMsg.getMatchList(), tableInfo, browser);
+        if (tableEntryMsg.getMatchCount() == 0) {
+            return PiMatchKey.EMPTY;
+        } else {
+            return decodeFieldMatchMsgs(tableEntryMsg.getMatchList(), tableInfo, browser);
+        }
     }
 
-    private static PiMatchKey decodeFieldMatchMsgs(Collection<FieldMatch> fieldMatchs, P4InfoOuterClass.Table tableInfo,
+    private static PiMatchKey decodeFieldMatchMsgs(List<FieldMatch> fieldMatchs, P4InfoOuterClass.Table tableInfo,
                                                    P4InfoBrowser browser)
             throws P4InfoBrowser.NotFoundException, EncodeException {
         // Match key for field matches.
@@ -404,9 +416,6 @@ final class TableEntryEncoder {
                 ImmutableByteSequence rangeHighValue = copyFrom(rangeFieldMatch.getHigh().asReadOnlyByteBuffer());
                 ImmutableByteSequence rangeLowValue = copyFrom(rangeFieldMatch.getLow().asReadOnlyByteBuffer());
                 return new PiRangeFieldMatch(headerFieldId, rangeLowValue, rangeHighValue);
-            case VALID:
-                FieldMatch.Valid validFieldMatch = fieldMatchMsg.getValid();
-                return new PiValidFieldMatch(headerFieldId, validFieldMatch.getValue());
             default:
                 throw new EncodeException(format(
                         "Decoding of field match type '%s' not implemented", typeCase.name()));
@@ -415,7 +424,7 @@ final class TableEntryEncoder {
 
     static TableAction encodePiTableAction(PiTableAction piTableAction, P4InfoBrowser browser)
             throws P4InfoBrowser.NotFoundException, EncodeException {
-
+        checkNotNull(piTableAction, "Cannot encode null PiTableAction");
         TableAction.Builder tableActionMsgBuilder = TableAction.newBuilder();
 
         switch (piTableAction.type()) {

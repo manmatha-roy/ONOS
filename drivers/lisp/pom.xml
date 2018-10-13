@@ -21,7 +21,7 @@
     <parent>
         <artifactId>onos-drivers-general</artifactId>
         <groupId>org.onosproject</groupId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -32,7 +32,7 @@
 
     <properties>
         <onos.app.name>org.onosproject.drivers.lisp</onos.app.name>
-        <onos.app.origin>ON.Lab</onos.app.origin>
+        <onos.app.origin>ONOS Community</onos.app.origin>
         <onos.app.category>Drivers</onos.app.category>
         <onos.app.title>LISP Device Drivers</onos.app.title>
         <onos.app.url>https://wiki.onosproject.org/display/ONOS/LISP+as+SBI</onos.app.url>
@@ -49,12 +49,12 @@
         </dependency>
         <dependency>
             <groupId>org.onosproject</groupId>
-            <artifactId>onos-mapping-api</artifactId>
+            <artifactId>onos-apps-mappingmanagement-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.onosproject</groupId>
-            <artifactId>onos-mapping-api</artifactId>
+            <artifactId>onos-apps-mappingmanagement-api</artifactId>
             <version>${project.version}</version>
             <classifier>tests</classifier>
             <scope>test</scope>
@@ -92,6 +92,16 @@
             <version>${project.version}</version>
             <scope>test</scope>
             <type>jar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.core</groupId>
+            <artifactId>jersey-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.inject</groupId>
+            <artifactId>jersey-hk2</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

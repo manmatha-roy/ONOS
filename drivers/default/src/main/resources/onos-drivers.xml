@@ -16,7 +16,7 @@
   -->
 <drivers>
     <driver name="default"
-            manufacturer="ON.Lab" hwVersion="0.0.1" swVersion="0.0.1">
+            manufacturer="Open Networking Foundation" hwVersion="0.0.1" swVersion="0.0.1">
         <behaviour api="org.onosproject.net.behaviour.Pipeliner"
                    impl="org.onosproject.driver.pipeline.DefaultSingleTablePipeline"/>
         <behaviour api="org.onosproject.openflow.controller.driver.OpenFlowSwitchDriver"
@@ -98,6 +98,10 @@
                    impl="org.onosproject.driver.handshaker.Ofdpa3SwitchHandshaker"/>
     </driver>
 
+    <driver name="liquidio" extends="ovs"
+            manufacturer="Cavium, Inc\." hwVersion="LiquidIO-II 210 SVN" swVersion="2\..*">
+    </driver>
+    
     <driver name="xpliant" extends="ofdpa3"
             manufacturer="Cavium, Inc\." hwVersion=".*" swVersion=".*">
         <behaviour api="org.onosproject.openflow.controller.driver.OpenFlowSwitchDriver"
@@ -117,15 +121,15 @@
 
     <!-- Driver for OFDPA Premium version -->
     <driver name="as7712-32x-premium" extends="ofdpa3"
-            manufacturer="^Broadcom Ltd\.$" hwVersion=".*[Aa][Ss]7712-32[Xx].*" swVersion="^OF-DPA Premium.*">
+            manufacturer="^Broadcom.*" hwVersion=".*[Aa][Ss]7712-32[Xx].*" swVersion="^OF-DPA Premium.*">
     </driver>
 
     <driver name="as5912-54x-premium" extends="qmx-ofdpa3"
-            manufacturer="^Broadcom Ltd\.$" hwVersion=".*[Aa][Ss]5912-54[Xx].*" swVersion="^OF-DPA Premium.*">
+            manufacturer="^Broadcom.*" hwVersion=".*[Aa][Ss]5912-54[Xx].*" swVersion="^OF-DPA Premium.*">
     </driver>
 
     <driver name="as5916-54x-premium" extends="qmx-ofdpa3"
-            manufacturer="^Broadcom Ltd\.$" hwVersion=".*[Aa][Ss]5916-54[Xx].*" swVersion="^OF-DPA Premium.*">
+            manufacturer="^Broadcom.*" hwVersion=".*[Aa][Ss]5916-54[Xx].*" swVersion="^OF-DPA Premium.*">
     </driver>
 
     <!-- OFDPA drivers from vendors -->
@@ -155,6 +159,8 @@
             hwVersion="OFDPA OVS" swVersion="OFDPA OVS">
         <behaviour api="org.onosproject.net.behaviour.Pipeliner"
                    impl="org.onosproject.driver.pipeline.ofdpa.OvsOfdpa2Pipeline"/>
+        <behaviour api="org.onosproject.openflow.controller.ExtensionSelectorInterpreter"
+                   impl="org.onosproject.driver.extensions.OvsOfdpaExtensionSelectorInterpreter" />
     </driver>
 
     <driver name="celestica" extends="default"
@@ -168,7 +174,7 @@
                    impl="org.onosproject.driver.pipeline.OltPipeline"/>
     </driver>
     <driver name="voltha" extends="default"
-            manufacturer="cord project" hwVersion=".*" swVersion="logical device for .*">
+            manufacturer="VOLTHA Project" hwVersion=".*" swVersion=".*">
         <behaviour api="org.onosproject.net.behaviour.Pipeliner"
                    impl="org.onosproject.driver.pipeline.OltPipeline"/>
     </driver>
@@ -275,5 +281,27 @@
                    impl="org.onosproject.driver.pipeline.CentecV350Pipeline"/>
     </driver>
     -->
+
+    <driver name="Arista" extends="default"
+            manufacturer="Arista.*" hwVersion="DCS.*" swVersion=".*">
+        <behaviour api="org.onosproject.net.behaviour.Pipeliner"
+                   impl="org.onosproject.driver.pipeline.AristaPipeliner"/>
+        <property name="meterCapable">false</property>
+    </driver>
+
+    <driver name="juniper"
+            manufacturer="Juniper.*" hwVersion="qfx5100.*" swVersion=".*">
+        <behaviour api="org.onosproject.openflow.controller.driver.OpenFlowSwitchDriver"
+                   impl="org.onosproject.driver.handshaker.JuniperSwitchHandshaker"/>
+        <behaviour api="org.onosproject.net.behaviour.Pipeliner"
+                   impl="org.onosproject.driver.pipeline.JuniperQfx5100Pipeliner"/>
+    </driver>
+
+    <driver name="ciscoof" extends="default"
+        manufacturer="Cisco Systems, Inc." hwVersion=".*" swVersion="7.0\(3\).*">
+        <behaviour api="org.onosproject.net.behaviour.Pipeliner"
+           impl="org.onosproject.driver.pipeline.CiscoN9kPipeliner" />
+    </driver>
+
 </drivers>
 

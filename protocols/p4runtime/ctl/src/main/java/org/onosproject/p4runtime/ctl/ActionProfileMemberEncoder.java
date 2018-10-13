@@ -16,13 +16,13 @@
 
 package org.onosproject.p4runtime.ctl;
 
+import org.onosproject.net.pi.model.PiActionProfileId;
 import org.onosproject.net.pi.model.PiPipeconf;
-import org.onosproject.net.pi.runtime.PiActionGroup;
 import org.onosproject.net.pi.runtime.PiActionGroupMember;
 import org.onosproject.net.pi.runtime.PiActionGroupMemberId;
-import p4.P4RuntimeOuterClass;
-import p4.P4RuntimeOuterClass.ActionProfileMember;
-import p4.config.P4InfoOuterClass;
+import p4.config.v1.P4InfoOuterClass;
+import p4.v1.P4RuntimeOuterClass;
+import p4.v1.P4RuntimeOuterClass.ActionProfileMember;
 
 import static java.lang.String.format;
 import static org.onosproject.p4runtime.ctl.TableEntryEncoder.decodeActionMsg;
@@ -31,7 +31,7 @@ import static org.onosproject.p4runtime.ctl.TableEntryEncoder.encodePiAction;
 /**
  * Encoder/Decoder of action profile member.
  */
-public final class ActionProfileMemberEncoder {
+final class ActionProfileMemberEncoder {
     private ActionProfileMemberEncoder() {
         // Hide default constructor
     }
@@ -39,23 +39,14 @@ public final class ActionProfileMemberEncoder {
     /**
      * Encode a PiActionGroupMember to a ActionProfileMember.
      *
-     * @param group the PI action group of members
-     * @param member the member to encode
-     * @param pipeconf the pipeconf
-     * @return encoded member
-     */
-    /**
-     * Encode a PiActionGroupMember to a ActionProfileMember.
-     *
-     * @param group the PI action group of members
-     * @param member the member to encode
+     * @param member   the member to encode
      * @param pipeconf the pipeconf, as encode spec
      * @return encoded member
-     * @throws P4InfoBrowser.NotFoundException can't find action profile from P4Info browser
-     * @throws EncodeException can't find P4Info from pipeconf
+     * @throws P4InfoBrowser.NotFoundException can't find action profile from
+     *                                         P4Info browser
+     * @throws EncodeException                 can't find P4Info from pipeconf
      */
-    static ActionProfileMember encode(PiActionGroup group,
-                                      PiActionGroupMember member,
+    static ActionProfileMember encode(PiActionGroupMember member,
                                       PiPipeconf pipeconf)
             throws P4InfoBrowser.NotFoundException, EncodeException {
 
@@ -73,7 +64,7 @@ public final class ActionProfileMemberEncoder {
 
         // action profile id
         P4InfoOuterClass.ActionProfile actionProfile =
-                browser.actionProfiles().getByName(group.actionProfileId().id());
+                browser.actionProfiles().getByName(member.actionProfile().id());
 
         int actionProfileId = actionProfile.getPreamble().getId();
         actionProfileMemberBuilder.setActionProfileId(actionProfileId);
@@ -88,23 +79,33 @@ public final class ActionProfileMemberEncoder {
     /**
      * Decode an action profile member to PI action group member.
      *
-     * @param member the action profile member
-     * @param weight the weight of the member
+     * @param member   the action profile member
+     * @param weight   the weight of the member
      * @param pipeconf the pipeconf, as decode spec
      * @return decoded PI action group member
-     * @throws P4InfoBrowser.NotFoundException can't find definition of action from P4 info
-     * @throws EncodeException can't get P4 info browser from pipeconf
+     * @throws P4InfoBrowser.NotFoundException can't find definition of action
+     *                                         from P4 info
+     * @throws EncodeException                 can't get P4 info browser from
+     *                                         pipeconf
      */
     static PiActionGroupMember decode(ActionProfileMember member,
                                       int weight,
                                       PiPipeconf pipeconf)
             throws P4InfoBrowser.NotFoundException, EncodeException {
         P4InfoBrowser browser = PipeconfHelper.getP4InfoBrowser(pipeconf);
-
         if (browser == null) {
             throw new EncodeException(format("Can't get P4 info browser from pipeconf %s", pipeconf));
         }
-        return PiActionGroupMember.builder().withId(PiActionGroupMemberId.of(member.getMemberId()))
+
+        final PiActionProfileId actionProfileId = PiActionProfileId.of(
+                browser.actionProfiles()
+                        .getById(member.getActionProfileId())
+                        .getPreamble()
+                        .getName());
+
+        return PiActionGroupMember.builder()
+                .forActionProfile(actionProfileId)
+                .withId(PiActionGroupMemberId.of(member.getMemberId()))
                 .withWeight(weight)
                 .withAction(decodeActionMsg(member.getAction(), browser))
                 .build();

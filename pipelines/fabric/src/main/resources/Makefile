@@ -1,22 +1,25 @@
-BMV2_CPU_PORT=255
+all: fabric fabric-spgw fabric-int fabric-spgw-int fabric-full constants
 
-BMV2_OPTIONS=-DTARGET_BMV2 -DCPU_PORT=$(BMV2_CPU_PORT)
+fabric:
+	@./bmv2-compile.sh "fabric" ""
 
-all: bmv2 bmv2-spgw
+fabric-spgw:
+	@./bmv2-compile.sh "fabric-spgw" "-DWITH_SPGW"
 
-bmv2:
-	p4c -v -x p4-16 -b bmv2-ss-p4org \
-	$(BMV2_OPTIONS) -o p4c-out/bmv2 \
-	--p4runtime-file p4c-out/bmv2/fabric.p4info \
-	--p4runtime-format text fabric.p4
-	mv p4c-out/bmv2/fabric.p4rt p4c-out/bmv2/fabric.p4info
-	rm -f p4c-out/bmv2/fabric.p4i
+fabric-int:
+	@./bmv2-compile.sh "fabric-int" "-DWITH_INT_SOURCE -DWITH_INT_TRANSIT"
 
-bmv2-spgw:
-	p4c-bm2-ss -o p4c-out/bmv2/fabric-spgw.json \
-	        $(BMV2_OPTIONS) -DWITH_SPGW \
-    		--p4runtime-file p4c-out/bmv2/fabric-spgw.p4info \
-    		--p4runtime-format text fabric.p4
+fabric-spgw-int:
+	@./bmv2-compile.sh "fabric-spgw-int" "-DWITH_SPGW -DWITH_INT_SOURCE -DWITH_INT_TRANSIT"
+
+fabric-full:
+	@./bmv2-compile.sh "fabric-full" "-DWITH_MULTICAST -DWITH_IPV6 -DWITH_SPGW \
+		-DWITH_INT_SOURCE -DWITH_INT_TRANSIT -DWITH_INT_SINK"
+
+constants:
+	onos-gen-p4-constants \
+		-o $(ONOS_ROOT)/pipelines/fabric/src/main/java/org/onosproject/pipelines/fabric/FabricConstants.java \
+		fabric p4c-out/fabric-full/bmv2/default/p4info.txt
 
 clean:
-	rm -rf p4c-out/*
+	rm -rf p4c-out/*/bmv2

@@ -17,9 +17,9 @@
 package org.onosproject.pipelines.fabric.pipeliner;
 
 import com.google.common.collect.ImmutableSet;
+import org.onlab.packet.IpPrefix;
 import org.onlab.packet.MacAddress;
 import org.onlab.packet.VlanId;
-import org.onlab.util.ImmutableByteSequence;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.flow.DefaultFlowRule;
 import org.onosproject.net.flow.DefaultTrafficSelector;
@@ -34,6 +34,7 @@ import org.onosproject.net.flow.criteria.MplsCriterion;
 import org.onosproject.net.flow.criteria.VlanIdCriterion;
 import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.flowobjective.ObjectiveError;
+import org.onosproject.net.pi.model.PiActionId;
 import org.onosproject.net.pi.runtime.PiAction;
 import org.onosproject.net.pi.runtime.PiActionParam;
 import org.onosproject.pipelines.fabric.FabricConstants;
@@ -84,7 +85,7 @@ public class FabricForwardingPipeliner {
         FlowRule flowRule = DefaultFlowRule.builder()
                 .withSelector(fwd.selector())
                 .withTreatment(fwd.treatment())
-                .forTable(FabricConstants.TBL_ACL_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_ACL)
                 .withPriority(fwd.priority())
                 .forDevice(deviceId)
                 .makePermanent()
@@ -145,15 +146,13 @@ public class FabricForwardingPipeliner {
             case L2_BROADCAST:
                 processL2BroadcastRule(vlanIdCriterion, fwd, resultBuilder);
                 break;
-            case IPV4_UNICAST:
-                processIpv4UnicastRule(ipDstCriterion, fwd, resultBuilder);
+            case IPV4_ROUTING:
+                processIpv4RoutingRule(ipDstCriterion, fwd, resultBuilder);
                 break;
             case MPLS:
                 processMplsRule(mplsCriterion, fwd, resultBuilder);
                 break;
-            case IPV4_MULTICAST:
-            case IPV6_UNICAST:
-            case IPV6_MULTICAST:
+            case IPV6_ROUTING:
             default:
                 log.warn("Unsupported forwarding function type {}", criteria);
                 resultBuilder.setError(ObjectiveError.UNSUPPORTED);
@@ -169,20 +168,19 @@ public class FabricForwardingPipeliner {
         checkNotNull(vlanIdCriterion, "VlanId criterion should not be null");
         checkNotNull(ethDstCriterion, "EthDst criterion should not be null");
 
-        if (fwd.nextId() == null) {
-            log.warn("Forwarding objective for L2 unicast should contains next id");
-            resultBuilder.setError(ObjectiveError.BADPARAMS);
-            return;
-        }
-
         VlanId vlanId = vlanIdCriterion.vlanId();
         MacAddress ethDst = ethDstCriterion.mac();
 
         TrafficSelector selector = DefaultTrafficSelector.builder()
                 .matchVlanId(vlanId)
-                .matchEthDst(ethDst)
+                .matchEthDstMasked(ethDst, MacAddress.EXACT_MASK)
                 .build();
-        TrafficTreatment treatment = buildSetNextIdTreatment(fwd.nextId());
+        TrafficTreatment treatment = fwd.treatment();
+        if (fwd.nextId() != null) {
+            treatment = buildSetNextIdTreatment(fwd.nextId(),
+                                                FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_BRIDGING);
+        }
+
         FlowRule flowRule = DefaultFlowRule.builder()
                 .withSelector(selector)
                 .withTreatment(treatment)
@@ -190,7 +188,7 @@ public class FabricForwardingPipeliner {
                 .withPriority(fwd.priority())
                 .makePermanent()
                 .forDevice(deviceId)
-                .forTable(FabricConstants.TBL_BRIDGING_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_BRIDGING)
                 .build();
 
         resultBuilder.addFlowRule(flowRule);
@@ -200,18 +198,17 @@ public class FabricForwardingPipeliner {
                                         ForwardingObjective fwd,
                                         PipelinerTranslationResult.Builder resultBuilder) {
         checkNotNull(vlanIdCriterion, "VlanId criterion should not be null");
-        if (fwd.nextId() == null) {
-            log.warn("Forwarding objective for L2 broadcast should contains next id");
-            resultBuilder.setError(ObjectiveError.BADPARAMS);
-            return;
-        }
 
         VlanId vlanId = vlanIdCriterion.vlanId();
 
         TrafficSelector selector = DefaultTrafficSelector.builder()
                 .matchVlanId(vlanId)
                 .build();
-        TrafficTreatment treatment = buildSetNextIdTreatment(fwd.nextId());
+        TrafficTreatment treatment = fwd.treatment();
+        if (fwd.nextId() != null) {
+            treatment = buildSetNextIdTreatment(fwd.nextId(),
+                                                FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_BRIDGING);
+        }
         FlowRule flowRule = DefaultFlowRule.builder()
                 .withSelector(selector)
                 .withTreatment(treatment)
@@ -219,25 +216,31 @@ public class FabricForwardingPipeliner {
                 .withPriority(fwd.priority())
                 .makePermanent()
                 .forDevice(deviceId)
-                .forTable(FabricConstants.TBL_BRIDGING_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_BRIDGING)
                 .build();
 
         resultBuilder.addFlowRule(flowRule);
     }
 
-    private void processIpv4UnicastRule(IPCriterion ipDstCriterion, ForwardingObjective fwd,
+    private void processIpv4RoutingRule(IPCriterion ipDstCriterion, ForwardingObjective fwd,
                                         PipelinerTranslationResult.Builder resultBuilder) {
         checkNotNull(ipDstCriterion, "IP dst criterion should not be null");
-        if (fwd.nextId() == null) {
-            log.warn("Forwarding objective for IPv4 unicast should contains next id");
-            resultBuilder.setError(ObjectiveError.BADPARAMS);
+
+        if (ipDstCriterion.ip().prefixLength() == 0) {
+            setDefaultIpv4Route(fwd, resultBuilder);
             return;
         }
-        TrafficSelector selector = DefaultTrafficSelector.builder()
-                .matchIPDst(ipDstCriterion.ip())
-                .build();
 
-        TrafficTreatment treatment = buildSetNextIdTreatment(fwd.nextId());
+        final TrafficSelector selector = DefaultTrafficSelector.builder()
+                    .matchIPDst(ipDstCriterion.ip())
+                    .build();
+
+        TrafficTreatment treatment = fwd.treatment();
+        if (fwd.nextId() != null) {
+            treatment = buildSetNextIdTreatment(
+                    fwd.nextId(),
+                    FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_ROUTING_V4);
+        }
         FlowRule flowRule = DefaultFlowRule.builder()
                 .withSelector(selector)
                 .withTreatment(treatment)
@@ -245,32 +248,60 @@ public class FabricForwardingPipeliner {
                 .withPriority(fwd.priority())
                 .makePermanent()
                 .forDevice(deviceId)
-                .forTable(FabricConstants.TBL_UNICAST_V4_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4)
                 .build();
 
         resultBuilder.addFlowRule(flowRule);
+    }
+
+    private void setDefaultIpv4Route(ForwardingObjective fwd,
+                                     PipelinerTranslationResult.Builder resultBuilder) {
+        final TrafficSelector selector1 = DefaultTrafficSelector.builder()
+                .matchIPDst(IpPrefix.valueOf("0.0.0.0/1")).build();
+        final TrafficSelector selector2 = DefaultTrafficSelector.builder()
+                .matchIPDst(IpPrefix.valueOf("128.0.0.0/1")).build();
+
+        TrafficTreatment treatment = fwd.treatment();
+        if (fwd.nextId() != null) {
+            treatment = buildSetNextIdTreatment(
+                    fwd.nextId(),
+                    FabricConstants.FABRIC_INGRESS_FORWARDING_SET_NEXT_ID_ROUTING_V4);
+        }
+
+        for (TrafficSelector selector : new TrafficSelector[]{selector1, selector2}) {
+            FlowRule rule = DefaultFlowRule.builder()
+                    .withSelector(selector)
+                    .withTreatment(treatment)
+                    .fromApp(fwd.appId())
+                    .withPriority(0)
+                    .makePermanent()
+                    .forDevice(deviceId)
+                    .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_ROUTING_V4)
+                    .build();
+
+            resultBuilder.addFlowRule(rule);
+        }
     }
 
     private void processMplsRule(MplsCriterion mplsCriterion, ForwardingObjective fwd,
                                  PipelinerTranslationResult.Builder resultBuilder) {
         checkNotNull(mplsCriterion, "Mpls criterion should not be null");
-        if (fwd.nextId() == null) {
-            log.warn("Forwarding objective for MPLS should contains next id");
-            resultBuilder.setError(ObjectiveError.BADPARAMS);
-            return;
+        TrafficTreatment treatment;
+
+        treatment = fwd.treatment();
+        if (fwd.nextId() != null) {
+            PiActionParam nextIdParam = new PiActionParam(FabricConstants.NEXT_ID, fwd.nextId());
+            PiAction nextIdAction = PiAction.builder()
+                    .withId(FabricConstants.FABRIC_INGRESS_FORWARDING_POP_MPLS_AND_NEXT)
+                    .withParameter(nextIdParam)
+                    .build();
+            treatment = DefaultTrafficTreatment.builder()
+                    .piTableAction(nextIdAction)
+                    .build();
         }
+
         TrafficSelector selector = DefaultTrafficSelector.builder()
                 .add(mplsCriterion)
-                .build();
-
-        PiActionParam nextIdParam = new PiActionParam(FabricConstants.ACT_PRM_NEXT_ID_ID,
-                                                      ImmutableByteSequence.copyFrom(fwd.nextId().byteValue()));
-        PiAction nextIdAction = PiAction.builder()
-                .withId(FabricConstants.ACT_FORWARDING_POP_MPLS_AND_NEXT_ID)
-                .withParameter(nextIdParam)
-                .build();
-        TrafficTreatment treatment = DefaultTrafficTreatment.builder()
-                .piTableAction(nextIdAction)
                 .build();
 
         FlowRule flowRule = DefaultFlowRule.builder()
@@ -280,17 +311,23 @@ public class FabricForwardingPipeliner {
                 .withPriority(fwd.priority())
                 .makePermanent()
                 .forDevice(deviceId)
-                .forTable(FabricConstants.TBL_MPLS_ID)
+                .forTable(FabricConstants.FABRIC_INGRESS_FORWARDING_MPLS)
                 .build();
 
         resultBuilder.addFlowRule(flowRule);
     }
 
-    private static TrafficTreatment buildSetNextIdTreatment(Integer nextId) {
-        PiActionParam nextIdParam = new PiActionParam(FabricConstants.ACT_PRM_NEXT_ID_ID,
-                                                      ImmutableByteSequence.copyFrom(nextId.byteValue()));
+    /**
+     * Builds treatment with set_next_id action, returns empty treatment
+     * if next id is null.
+     *
+     * @param nextId the next id for action
+     * @return treatment with set_next_id action; empty treatment if next id is null
+     */
+    private static TrafficTreatment buildSetNextIdTreatment(Integer nextId, PiActionId actionId) {
+        PiActionParam nextIdParam = new PiActionParam(FabricConstants.NEXT_ID, nextId);
         PiAction nextIdAction = PiAction.builder()
-                .withId(FabricConstants.ACT_FORWARDING_SET_NEXT_ID_ID)
+                .withId(actionId)
                 .withParameter(nextIdParam)
                 .build();
 

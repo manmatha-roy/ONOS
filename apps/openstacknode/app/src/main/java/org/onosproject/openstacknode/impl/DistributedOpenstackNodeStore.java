@@ -25,11 +25,19 @@ import org.apache.felix.scr.annotations.Service;
 import org.onlab.util.KryoNamespace;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
+import org.onosproject.net.behaviour.ControllerInfo;
+import org.onosproject.openstacknode.api.DefaultKeystoneConfig;
+import org.onosproject.openstacknode.api.DefaultNeutronConfig;
+import org.onosproject.openstacknode.api.DefaultOpenstackAuth;
+import org.onosproject.openstacknode.api.DefaultOpenstackNode;
+import org.onosproject.openstacknode.api.DpdkConfig;
+import org.onosproject.openstacknode.api.DpdkInterface;
 import org.onosproject.openstacknode.api.NodeState;
 import org.onosproject.openstacknode.api.OpenstackNode;
 import org.onosproject.openstacknode.api.OpenstackNodeEvent;
 import org.onosproject.openstacknode.api.OpenstackNodeStore;
 import org.onosproject.openstacknode.api.OpenstackNodeStoreDelegate;
+import org.onosproject.openstacknode.api.OpenstackPhyInterface;
 import org.onosproject.store.AbstractStore;
 import org.onosproject.store.serializers.KryoNamespaces;
 import org.onosproject.store.service.ConsistentMap;
@@ -40,16 +48,23 @@ import org.onosproject.store.service.StorageService;
 import org.onosproject.store.service.Versioned;
 import org.slf4j.Logger;
 
+import java.util.Collection;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.concurrent.Executors.newSingleThreadExecutor;
 import static org.onlab.util.Tools.groupedThreads;
 import static org.onosproject.openstacknode.api.NodeState.COMPLETE;
 import static org.onosproject.openstacknode.api.NodeState.INCOMPLETE;
-import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.*;
+import static org.onosproject.openstacknode.api.OpenstackNode.NodeType.CONTROLLER;
+import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.OPENSTACK_NODE_COMPLETE;
+import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.OPENSTACK_NODE_CREATED;
+import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.OPENSTACK_NODE_INCOMPLETE;
+import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.OPENSTACK_NODE_REMOVED;
+import static org.onosproject.openstacknode.api.OpenstackNodeEvent.Type.OPENSTACK_NODE_UPDATED;
+import static org.onosproject.store.service.MapEvent.Type.INSERT;
+import static org.onosproject.store.service.MapEvent.Type.UPDATE;
 import static org.slf4j.LoggerFactory.getLogger;
 
 /**
@@ -61,7 +76,7 @@ public class DistributedOpenstackNodeStore
         extends AbstractStore<OpenstackNodeEvent, OpenstackNodeStoreDelegate>
         implements OpenstackNodeStore {
 
-    protected final Logger log = getLogger(getClass());
+    private final Logger log = getLogger(getClass());
 
     private static final String ERR_NOT_FOUND = " does not exist";
     private static final String ERR_DUPLICATE = " already exists";
@@ -72,6 +87,22 @@ public class DistributedOpenstackNodeStore
             .register(DefaultOpenstackNode.class)
             .register(OpenstackNode.NodeType.class)
             .register(NodeState.class)
+            .register(DpdkConfig.class)
+            .register(DefaultDpdkConfig.class)
+            .register(DpdkConfig.DatapathType.class)
+            .register(OpenstackPhyInterface.class)
+            .register(DefaultOpenstackPhyInterface.class)
+            .register(DpdkInterface.class)
+            .register(DefaultDpdkInterface.class)
+            .register(DpdkInterface.Type.class)
+            .register(ControllerInfo.class)
+            .register(DefaultOpenstackAuth.class)
+            .register(DefaultOpenstackAuth.Perspective.class)
+            .register(DefaultOpenstackAuth.Protocol.class)
+            .register(DefaultOpenstackSshAuth.class)
+            .register(DefaultKeystoneConfig.class)
+            .register(DefaultNeutronConfig.class)
+            .register(Collection.class)
             .build();
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
@@ -136,31 +167,29 @@ public class DistributedOpenstackNodeStore
 
     @Override
     public Set<OpenstackNode> nodes() {
-        Set<OpenstackNode> osNodes = osNodeStore.values().stream()
-                .map(Versioned::value)
-                .collect(Collectors.toSet());
-        return ImmutableSet.copyOf(osNodes);
+        return ImmutableSet.copyOf(osNodeStore.asJavaMap().values());
     }
 
     @Override
     public OpenstackNode node(String hostname) {
-        Versioned<OpenstackNode> osNode = osNodeStore.get(hostname);
-        return osNode == null ? null : osNode.value();
+        return osNodeStore.asJavaMap().get(hostname);
     }
 
+    /**
+     * An internal openstack node map listener.
+     */
     private class OpenstackNodeMapListener implements MapEventListener<String, OpenstackNode> {
 
         @Override
         public void event(MapEvent<String, OpenstackNode> event) {
+
             switch (event.type()) {
                 case INSERT:
                     log.debug("OpenStack node created {}", event.newValue());
-                    eventExecutor.execute(() -> {
-                        notifyDelegate(new OpenstackNodeEvent(
-                                OPENSTACK_NODE_CREATED,
-                                event.newValue().value()
-                        ));
-                    });
+                    eventExecutor.execute(() ->
+                            notifyDelegate(new OpenstackNodeEvent(
+                                OPENSTACK_NODE_CREATED, event.newValue().value()
+                    )));
                     break;
                 case UPDATE:
                     log.debug("OpenStack node updated {}", event.newValue());
@@ -169,6 +198,13 @@ public class DistributedOpenstackNodeStore
                                 OPENSTACK_NODE_UPDATED,
                                 event.newValue().value()
                         ));
+
+                        // if the event is about controller node, we will not
+                        // process COMPLETE and INCOMPLETE state
+                        if (isControllerNode(event)) {
+                            return;
+                        }
+
                         if (event.newValue().value().state() == COMPLETE) {
                             notifyDelegate(new OpenstackNodeEvent(
                                     OPENSTACK_NODE_COMPLETE,
@@ -184,17 +220,35 @@ public class DistributedOpenstackNodeStore
                     break;
                 case REMOVE:
                     log.debug("OpenStack node removed {}", event.oldValue());
-                    eventExecutor.execute(() -> {
-                        notifyDelegate(new OpenstackNodeEvent(
-                                OPENSTACK_NODE_REMOVED,
-                                event.oldValue().value()
-                        ));
-                    });
+                    eventExecutor.execute(() ->
+                            notifyDelegate(new OpenstackNodeEvent(
+                                OPENSTACK_NODE_REMOVED, event.oldValue().value()
+                    )));
                     break;
                 default:
                     // do nothing
                     break;
             }
+        }
+
+        /**
+         * Checks the openstack node whether a controller node or not with
+         * the given MapEvent.
+         *
+         * @param event map event
+         * @return controller node indicator flag
+         */
+        private boolean isControllerNode(MapEvent<String, OpenstackNode> event) {
+
+            OpenstackNode node;
+
+            if (event.type() == INSERT || event.type() == UPDATE) {
+                node = event.newValue().value();
+            } else {
+                node = event.oldValue().value();
+            }
+
+            return node.type() == CONTROLLER;
         }
     }
 }

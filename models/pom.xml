@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.onosproject</groupId>
         <artifactId>onos</artifactId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>onos-models</artifactId>
@@ -30,12 +30,15 @@
     <description>ONOS YANG models</description>
 
     <modules>
+        <module>ietf</module>
         <module>common</module>
         <module>microsemi</module>
         <module>openconfig</module>
+        <module>openconfig-infinera</module>
         <module>openroadm</module>
         <module>l3vpn</module>
         <module>tapi</module>
+        <module>ciena/waveserverai</module>
     </modules>
 
 </project>

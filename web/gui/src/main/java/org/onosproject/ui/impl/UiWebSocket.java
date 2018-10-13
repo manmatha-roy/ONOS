@@ -27,6 +27,7 @@ import org.onosproject.ui.GlyphConstants;
 import org.onosproject.ui.UiConnection;
 import org.onosproject.ui.UiExtension;
 import org.onosproject.ui.UiExtensionService;
+import org.onosproject.ui.UiGlyph;
 import org.onosproject.ui.UiMessageHandler;
 import org.onosproject.ui.UiMessageHandlerFactory;
 import org.onosproject.ui.UiSessionToken;
@@ -76,6 +77,8 @@ public class UiWebSocket
     private static final String LOCALE = "locale";
 
     private static final String TOPO = "topo";
+
+    private static final String GLYPHS = "glyphs";
 
     private static final long MAX_AGE_MS = 30_000;
 
@@ -250,7 +253,6 @@ public class UiWebSocket
 
             if (sessionToken == null) {
                 authenticate(type, message);
-
             } else {
                 UiMessageHandler handler = handlers.get(type);
                 if (handler != null) {
@@ -346,7 +348,9 @@ public class UiWebSocket
 
     private void authenticate(String type, ObjectNode message) {
         if (!AUTHENTICATION.equals(type)) {
-            log.warn("Non-Authenticated Web Socket: {}", message);
+            log.warn("WebSocket not authenticated: {}", message);
+            sendMessage(ERROR, notAuthorized(null));
+            close();
             return;
         }
 
@@ -366,7 +370,7 @@ public class UiWebSocket
     private ObjectNode notAuthorized(UiSessionToken token) {
         return objectNode()
                 .put("message", "invalid authentication token")
-                .put("badToken", token.toString());
+                .put("badToken", token != null ? token.toString() : "null");
     }
 
     private void registerOverlays(UiExtension ext) {
@@ -436,9 +440,21 @@ public class UiWebSocket
             instances.add(instance);
         }
 
+        ArrayNode glyphInstances = arrayNode();
+        UiExtensionService uiExtensionService = directory.get(UiExtensionService.class);
+        for (UiGlyph glyph : uiExtensionService.getGlyphs()) {
+            ObjectNode glyphInstance = objectNode()
+                    .put(GlyphConstants.ID, glyph.id())
+                    .put(GlyphConstants.VIEWBOX, glyph.viewbox())
+                    .put(GlyphConstants.PATH, glyph.path());
+            glyphInstances.add(glyphInstance);
+        }
+
         ObjectNode payload = objectNode();
         payload.set(CLUSTER_NODES, instances);
+        payload.set(GLYPHS, glyphInstances);
         payload.put(USER, userName);
+
         sendMessage(BOOTSTRAP, payload);
     }
 

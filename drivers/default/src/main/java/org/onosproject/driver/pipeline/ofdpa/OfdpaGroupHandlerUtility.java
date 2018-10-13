@@ -27,6 +27,8 @@ import org.onosproject.net.behaviour.NextGroup;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
+import org.onosproject.net.flow.criteria.Criterion;
+import org.onosproject.net.flow.criteria.VlanIdCriterion;
 import org.onosproject.net.flow.instructions.Instruction;
 import org.onosproject.net.flow.instructions.Instructions;
 import org.onosproject.net.flow.instructions.L2ModificationInstruction;
@@ -60,12 +62,14 @@ public final class OfdpaGroupHandlerUtility {
      * OFDPA requires group-id's to have a certain form.
      * L2 Interface Groups have <4bits-0><12bits-vlanId><16bits-portId>
      * L3 Unicast Groups have <4bits-2><28bits-index>
+     * L3 Unicast Groups for double-vlan have <4bits-2><1bit-1><12bits-vlanId><15bits-portId>
      * MPLS Interface Groups have <4bits-9><4bits:0><24bits-index>
      * L3 ECMP Groups have <4bits-7><28bits-index>
      * L2 Flood Groups have <4bits-4><12bits-vlanId><16bits-index>
      * L3 VPN Groups have <4bits-9><4bits-2><24bits-index>
      */
     static final int L2_INTERFACE_TYPE = 0x00000000;
+    static final int L2_UNFILTERED_TYPE = 0xb0000000;
     static final int L3_INTERFACE_TYPE = 0x50000000;
     static final int L3_UNICAST_TYPE = 0x20000000;
     static final int L3_MULTICAST_TYPE = 0x60000000;
@@ -73,10 +77,12 @@ public final class OfdpaGroupHandlerUtility {
     static final int MPLS_L3VPN_SUBTYPE = 0x92000000;
     static final int L3_ECMP_TYPE = 0x70000000;
     static final int L2_FLOOD_TYPE = 0x40000000;
+    static final int L2_MULTICAST_TYPE = 0x30000000;
 
     static final int TYPE_MASK = 0x0fffffff;
     static final int SUBTYPE_MASK = 0x00ffffff;
     static final int TYPE_VLAN_MASK = 0x0000ffff;
+    static final int TYPE_L3UG_DOUBLE_VLAN_MASK = 0x08000000;
 
     static final int THREE_BIT_MASK = 0x0fff;
     static final int FOUR_BIT_MASK = 0xffff;
@@ -263,7 +269,6 @@ public final class OfdpaGroupHandlerUtility {
         return indices;
     }
 
-
     /**
      * Get indices to remove comparing next group with next objective.
      *
@@ -394,6 +399,43 @@ public final class OfdpaGroupHandlerUtility {
         return ImmutableList.copyOf(newBuckets);
     }
 
+    static List<GroupBucket> createL3MulticastBucket(List<GroupInfo> groupInfos) {
+        List<GroupBucket> l3McastBuckets = new ArrayList<>();
+        // For each inner group
+        groupInfos.forEach(groupInfo -> {
+            // Points to L3 interface group if there is one.
+            // Otherwise points to L2 interface group directly.
+            GroupDescription nextGroupDesc = (groupInfo.nextGroupDesc() != null) ?
+                    groupInfo.nextGroupDesc() : groupInfo.innerMostGroupDesc();
+            TrafficTreatment.Builder ttb = DefaultTrafficTreatment.builder();
+            ttb.group(new GroupId(nextGroupDesc.givenGroupId()));
+            GroupBucket abucket = DefaultGroupBucket.createAllGroupBucket(ttb.build());
+            l3McastBuckets.add(abucket);
+        });
+        // Done return the new list of buckets
+        return l3McastBuckets;
+    }
+
+    static Group retrieveTopLevelGroup(List<Deque<GroupKey>> allActiveKeys,
+                                       DeviceId deviceId,
+                                       GroupService groupService,
+                                       int nextid) {
+        GroupKey topLevelGroupKey;
+        if (!allActiveKeys.isEmpty()) {
+            topLevelGroupKey = allActiveKeys.get(0).peekFirst();
+        } else {
+            log.warn("Could not determine top level group while processing"
+                             + "next:{} in dev:{}", nextid, deviceId);
+            return null;
+        }
+        Group topGroup = groupService.getGroup(deviceId, topLevelGroupKey);
+        if (topGroup == null) {
+            log.warn("Could not find top level group while processing "
+                             + "next:{} in dev:{}", nextid, deviceId);
+        }
+        return topGroup;
+    }
+
     /**
      * Extracts VlanId from given group ID.
      *
@@ -412,8 +454,18 @@ public final class OfdpaGroupHandlerUtility {
         return new DefaultGroupKey(Ofdpa2Pipeline.appKryo.serialize(hash));
     }
 
+    public static GroupKey l2MulticastGroupKey(VlanId vlanId, DeviceId deviceId) {
+        int hash = Objects.hash(deviceId, vlanId);
+        hash = L2_MULTICAST_TYPE | TYPE_MASK & hash;
+        return new DefaultGroupKey(Ofdpa2Pipeline.appKryo.serialize(hash));
+    }
+
     public static int l2GroupId(VlanId vlanId, long portNum) {
         return L2_INTERFACE_TYPE | (vlanId.toShort() << 16) | (int) portNum;
+    }
+
+    public static int l2UnfilteredGroupId(long portNum) {
+        return L2_UNFILTERED_TYPE | (int) portNum;
     }
 
     /**
@@ -432,6 +484,23 @@ public final class OfdpaGroupHandlerUtility {
         long portHigherBits = portNumber & PORT_HIGHER_BITS_MASK;
         int hash = Objects.hash(deviceId, vlanId, portHigherBits);
         return L2_INTERFACE_TYPE | (TYPE_MASK & hash << 6) | portLowerBits;
+    }
+
+    /**
+     * Returns a hash as the L2 Unfiltered Interface Group Key.
+     *
+     * Keep the lower 6-bit for port since port number usually smaller than 64.
+     * Hash other information into remaining 28 bits.
+     *
+     * @param deviceId Device ID
+     * @param portNumber Port number
+     * @return L2 unfiltered interface group key
+     */
+    public static int l2UnfilteredGroupKey(DeviceId deviceId, long portNumber) {
+        int portLowerBits = (int) portNumber & PORT_LOWER_BITS_MASK;
+        long portHigherBits = portNumber & PORT_HIGHER_BITS_MASK;
+        int hash = Objects.hash(deviceId, portHigherBits);
+        return L2_UNFILTERED_TYPE | (TYPE_MASK & hash << 6) | portLowerBits;
     }
 
     /**
@@ -598,22 +667,53 @@ public final class OfdpaGroupHandlerUtility {
             // GroupChecker execution needs to be protected
             // from unhandled exceptions
             try {
-                if (groupHandler.pendingGroups().size() != 0) {
-                    log.debug("pending groups being checked: {}", groupHandler.pendingGroups().asMap().keySet());
+                if (groupHandler.pendingGroups.size() != 0) {
+                    log.debug("pending groups being checked: {}",
+                              groupHandler.pendingGroups.asMap().keySet());
                 }
-                if (groupHandler.pendingAddNextObjectives().size() != 0) {
+                if (groupHandler.pendingAddNextObjectives.size() != 0) {
                     log.debug("pending add-next-obj being checked: {}",
-                              groupHandler.pendingAddNextObjectives().asMap().keySet());
+                              groupHandler.pendingAddNextObjectives.asMap().keySet());
                 }
-                Set<GroupKey> keys = groupHandler.pendingGroups().asMap().keySet().stream()
-                        .filter(key -> groupHandler.groupService.getGroup(groupHandler.deviceId, key) != null)
+                if (groupHandler.pendingRemoveNextObjectives.size() != 0) {
+                    log.debug("pending remove-next-obj being checked: {}",
+                              groupHandler.pendingRemoveNextObjectives.asMap().values());
+                }
+                if (groupHandler.pendingUpdateNextObjectives.size() != 0) {
+                    log.debug("pending update-next-obj being checked: {}",
+                              groupHandler.pendingUpdateNextObjectives.keySet());
+                }
+
+                Set<GroupKey> keys = groupHandler.pendingGroups.asMap().keySet()
+                        .stream()
+                        .filter(key -> groupHandler.groupService
+                                .getGroup(groupHandler.deviceId, key) != null)
                         .collect(Collectors.toSet());
-                Set<GroupKey> otherkeys = groupHandler.pendingAddNextObjectives().asMap().keySet().stream()
-                        .filter(otherkey -> groupHandler.groupService.getGroup(groupHandler.deviceId, otherkey) != null)
+                Set<GroupKey> otherkeys = groupHandler.pendingAddNextObjectives
+                        .asMap().keySet().stream()
+                        .filter(otherkey -> groupHandler.groupService
+                                .getGroup(groupHandler.deviceId, otherkey) != null)
                         .collect(Collectors.toSet());
                 keys.addAll(otherkeys);
-
                 keys.forEach(key -> groupHandler.processPendingAddGroupsOrNextObjs(key, false));
+
+                keys = groupHandler.pendingUpdateNextObjectives.keySet()
+                        .stream()
+                        .filter(key -> groupHandler.groupService
+                                .getGroup(groupHandler.deviceId, key) != null)
+                        .collect(Collectors.toSet());
+                keys.forEach(key -> groupHandler.processPendingUpdateNextObjs(key));
+
+                Set<GroupKey> k = Sets.newHashSet();
+                groupHandler.pendingRemoveNextObjectives
+                    .asMap().values().stream().forEach(keylist -> {
+                        k.addAll(keylist.stream()
+                                 .filter(key -> groupHandler.groupService
+                                         .getGroup(groupHandler.deviceId, key) == null)
+                                 .collect(Collectors.toSet()));
+                    });
+                k.forEach(key -> groupHandler.processPendingRemoveNextObjs(key));
+
             } catch (Exception exception) {
                 // Just log. It is safe for now.
                 log.warn("Uncaught exception is detected: {}", exception.getMessage());
@@ -621,4 +721,52 @@ public final class OfdpaGroupHandlerUtility {
             }
         }
     }
+
+    /**
+     * Helper method to decide whether L2 Interface group or L2 Unfiltered group needs to be created.
+     * L2 Unfiltered group will be created if meta has VlanIdCriterion with VlanId.ANY, and
+     * treatment has set Vlan ID action.
+     *
+     * @param treatment  treatment passed in by the application as part of the nextObjective
+     * @param meta       metadata passed in by the application as part of the nextObjective
+     * @return true if L2 Unfiltered group needs to be created, false otherwise.
+     */
+    public static boolean createUnfiltered(TrafficTreatment treatment, TrafficSelector meta) {
+        if (meta == null || treatment == null) {
+            return false;
+        }
+        VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) meta.getCriterion(Criterion.Type.VLAN_VID);
+        if (vlanIdCriterion == null || !vlanIdCriterion.vlanId().equals(VlanId.ANY)) {
+            return false;
+        }
+
+        return treatment.allInstructions().stream()
+                .filter(i -> (i.type() == Instruction.Type.L2MODIFICATION
+                        && ((L2ModificationInstruction) i).subtype() == L2ModificationInstruction.L2SubType.VLAN_ID))
+                .count() == 1;
+    }
+
+    /**
+     * Returns a hash as the L3 Unicast Group Key.
+     *
+     * Keep the lower 6-bit for port since port number usually smaller than 64.
+     * Hash other information into remaining 28 bits.
+     *
+     * @param deviceId Device ID
+     * @param vlanId vlan ID
+     * @param portNumber Port number
+     * @return L3 unicast group key
+     */
+    public static int doubleVlanL3UnicastGroupKey(DeviceId deviceId, VlanId vlanId, long portNumber) {
+        int portLowerBits = (int) portNumber & PORT_LOWER_BITS_MASK;
+        long portHigherBits = portNumber & PORT_HIGHER_BITS_MASK;
+        int hash = Objects.hash(deviceId, portHigherBits, vlanId);
+        return  L3_UNICAST_TYPE | (TYPE_MASK & hash << 6) | portLowerBits;
+    }
+
+    public static int doubleVlanL3UnicastGroupId(VlanId vlanId, long portNum) {
+        // <4bits-2><1bit-1><12bits-vlanId><15bits-portId>
+        return L3_UNICAST_TYPE | 1 << 27 | (vlanId.toShort() << 15) | (int) (portNum & 0x7FFF);
+    }
+
 }

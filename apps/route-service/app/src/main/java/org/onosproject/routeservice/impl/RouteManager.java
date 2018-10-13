@@ -16,6 +16,7 @@
 
 package org.onosproject.routeservice.impl;
 
+import com.google.common.collect.ImmutableList;
 import org.apache.felix.scr.annotations.Activate;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.Deactivate;
@@ -54,6 +55,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -94,6 +96,9 @@ public class RouteManager implements RouteService, RouteAdminService {
     private Map<RouteListener, ListenerQueue> listeners = new HashMap<>();
 
     private ThreadFactory threadFactory;
+
+    protected Executor hostEventExecutor = newSingleThreadExecutor(
+        groupedThreads("rm-event-host", "%d", log));
 
     @Activate
     protected void activate() {
@@ -211,6 +216,11 @@ public class RouteManager implements RouteService, RouteAdminService {
     }
 
     @Override
+    public Collection<ResolvedRoute> getAllResolvedRoutes(IpPrefix prefix) {
+        return ImmutableList.copyOf(resolvedRouteStore.getAllRoutes(prefix));
+    }
+
+    @Override
     public void update(Collection<Route> routes) {
         synchronized (this) {
             routes.forEach(route -> {
@@ -260,6 +270,10 @@ public class RouteManager implements RouteService, RouteAdminService {
     }
 
     private void resolve(RouteSet routes) {
+        if (routes.routes() == null) {
+            // The routes were removed before we got to them, nothing to do
+            return;
+        }
         Set<ResolvedRoute> resolvedRoutes = routes.routes().stream()
                 .map(this::resolve)
                 .filter(Objects::nonNull)
@@ -380,12 +394,13 @@ public class RouteManager implements RouteService, RouteAdminService {
             switch (event.type()) {
             case HOST_ADDED:
             case HOST_UPDATED:
-                hostUpdated(event.subject());
+            case HOST_MOVED:
+                log.trace("Scheduled host event {}", event);
+                hostEventExecutor.execute(() -> hostUpdated(event.subject()));
                 break;
             case HOST_REMOVED:
-                hostRemoved(event.subject());
-                break;
-            case HOST_MOVED:
+                log.trace("Scheduled host event {}", event);
+                hostEventExecutor.execute(() -> hostRemoved(event.subject()));
                 break;
             default:
                 break;

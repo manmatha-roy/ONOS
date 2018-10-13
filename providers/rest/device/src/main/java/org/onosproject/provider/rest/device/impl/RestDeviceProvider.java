@@ -21,12 +21,16 @@ import com.google.common.collect.ImmutableList;
 import org.apache.felix.scr.annotations.Activate;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.Deactivate;
+import org.apache.felix.scr.annotations.Modified;
+import org.apache.felix.scr.annotations.Property;
 import org.apache.felix.scr.annotations.Reference;
 import org.apache.felix.scr.annotations.ReferenceCardinality;
 import org.onlab.packet.ChassisId;
 import org.onlab.util.SharedExecutors;
 import org.onlab.util.SharedScheduledExecutorService;
 import org.onlab.util.SharedScheduledExecutors;
+import org.onlab.util.Tools;
+import org.onosproject.cfg.ComponentConfigService;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
 import org.onosproject.net.AnnotationKeys;
@@ -63,11 +67,13 @@ import org.onosproject.net.provider.ProviderId;
 import org.onosproject.protocol.rest.DefaultRestSBDevice;
 import org.onosproject.protocol.rest.RestSBController;
 import org.onosproject.protocol.rest.RestSBDevice;
+import org.osgi.service.component.ComponentContext;
 import org.slf4j.Logger;
 
 import javax.ws.rs.ProcessingException;
 import javax.ws.rs.core.MediaType;
 import java.util.Collection;
+import java.util.Dictionary;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -101,8 +107,8 @@ public class RestDeviceProvider extends AbstractProvider
     private static final String IPADDRESS = "ipaddress";
     private static final String ISNOTNULL = "Rest device is not null";
     private static final String UNKNOWN = "unknown";
+    private static final String POLL_FREQUENCY = "pollFrequency";
     private static final int REST_TIMEOUT_SEC = 5;
-    private static final int DEFAULT_POLL_FREQUENCY_SECONDS = 30;
     private static final int EXECUTOR_THREAD_POOL_SIZE = 8;
     private final Logger log = getLogger(getClass());
 
@@ -113,7 +119,10 @@ public class RestDeviceProvider extends AbstractProvider
     protected RestSBController controller;
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
-    protected NetworkConfigRegistry cfgService;
+    protected NetworkConfigRegistry netCfgService;
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
+    protected ComponentConfigService compCfgService;
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected CoreService coreService;
@@ -123,6 +132,12 @@ public class RestDeviceProvider extends AbstractProvider
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected DriverService driverService;
+
+    private static final int DEFAULT_POLL_FREQUENCY_SECONDS = 30;
+    @Property(name = POLL_FREQUENCY, intValue = DEFAULT_POLL_FREQUENCY_SECONDS,
+            label = "Configure poll frequency for port status and statistics; " +
+                    "default is 30 seconds")
+    private int pollFrequency = DEFAULT_POLL_FREQUENCY_SECONDS;
 
     private DeviceProviderService providerService;
     private ApplicationId appId;
@@ -149,23 +164,44 @@ public class RestDeviceProvider extends AbstractProvider
     @Activate
     public void activate() {
         appId = coreService.registerApplication(APP_NAME);
+        compCfgService.registerProperties(getClass());
         providerService = providerRegistry.register(this);
-        factories.forEach(cfgService::registerConfigFactory);
+        factories.forEach(netCfgService::registerConfigFactory);
         executor = Executors.newFixedThreadPool(
             EXECUTOR_THREAD_POOL_SIZE, groupedThreads("onos/restsbprovider", "device-installer-%d", log)
         );
-        cfgService.addListener(configListener);
+        netCfgService.addListener(configListener);
         executor.execute(RestDeviceProvider.this::createAndConnectDevices);
         scheduledTask = schedulePolling();
         log.info("Started");
     }
 
+    @Modified
+    public void modified(ComponentContext context) {
+        int previousPollFrequency = pollFrequency;
+
+        if (context != null) {
+            Dictionary<?, ?> properties = context.getProperties();
+            pollFrequency = Tools.getIntegerProperty(properties, POLL_FREQUENCY,
+                                                     DEFAULT_POLL_FREQUENCY_SECONDS);
+            log.info("Configured. Poll frequency is configured to {} seconds", pollFrequency);
+        }
+
+        // Re-schedule only if frequency has changed
+        if (!scheduledTask.isCancelled() && (previousPollFrequency != pollFrequency)) {
+            log.info("Re-scheduling port statistics task with frequency {} seconds", pollFrequency);
+            scheduledTask.cancel(true);
+            scheduledTask = schedulePolling();
+        }
+    }
+
     @Deactivate
     public void deactivate() {
-        cfgService.removeListener(configListener);
+        compCfgService.unregisterProperties(getClass(), false);
+        netCfgService.removeListener(configListener);
         providerRegistry.unregister(this);
         providerService = null;
-        factories.forEach(cfgService::unregisterConfigFactory);
+        factories.forEach(netCfgService::unregisterConfigFactory);
         scheduledTask.cancel(true);
         executor.shutdown();
         log.info("Stopped");
@@ -205,35 +241,26 @@ public class RestDeviceProvider extends AbstractProvider
     private void deviceAdded(RestSBDevice restSBDev) {
         checkNotNull(restSBDev, ISNOTNULL);
 
-        //check if the server is controlling a single or multiple devices
+        Driver driver = driverService.getDriver(restSBDev.manufacturer().get(),
+                                             restSBDev.hwVersion().get(),
+                                             restSBDev.swVersion().get());
+
+        // Check if the server is controlling a single or multiple devices
         if (restSBDev.isProxy()) {
-
-            Driver driver = driverService.getDriver(restSBDev.manufacturer().get(),
-                                                    restSBDev.hwVersion().get(),
-                                                    restSBDev.swVersion().get());
-
             if (driver != null && driver.hasBehaviour(DevicesDiscovery.class)) {
-
-                //Creates the driver to communicate with the server
-                DevicesDiscovery devicesDiscovery =
-                        devicesDiscovery(restSBDev, driver);
+                DevicesDiscovery devicesDiscovery = devicesDiscovery(restSBDev, driver);
                 Set<DeviceId> deviceIds = devicesDiscovery.deviceIds();
                 restSBDev.setActive(true);
                 deviceIds.forEach(deviceId -> {
                     controller.addProxiedDevice(deviceId, restSBDev);
-                    DeviceDescription devDesc =
-                            devicesDiscovery.deviceDetails(deviceId);
-                    checkNotNull(devDesc,
-                                 "deviceDescription cannot be null");
-                    providerService.deviceConnected(
-                            deviceId, mergeAnn(restSBDev.deviceId(), devDesc));
+                    DeviceDescription devDesc = devicesDiscovery.deviceDetails(deviceId);
+                    checkNotNull(devDesc, "DeviceDescription cannot be null");
+                    providerService.deviceConnected(deviceId, mergeAnn(restSBDev.deviceId(), devDesc));
 
                     if (driver.hasBehaviour(DeviceDescriptionDiscovery.class)) {
                         DriverHandler h = driverService.createHandler(deviceId);
-                        DeviceDescriptionDiscovery devDisc =
-                                h.behaviour(DeviceDescriptionDiscovery.class);
-                        providerService.updatePorts(deviceId,
-                                                    devDisc.discoverPortDetails());
+                        DeviceDescriptionDiscovery devDisc = h.behaviour(DeviceDescriptionDiscovery.class);
+                        providerService.updatePorts(deviceId, devDisc.discoverPortDetails());
                     }
 
                     checkAndUpdateDevice(deviceId);
@@ -243,21 +270,36 @@ public class RestDeviceProvider extends AbstractProvider
             }
         } else {
             DeviceId deviceId = restSBDev.deviceId();
-            ChassisId cid = new ChassisId();
-            String ipAddress = restSBDev.ip().toString();
-            SparseAnnotations annotations = DefaultAnnotations.builder()
-                    .set(IPADDRESS, ipAddress)
-                    .set(AnnotationKeys.PROTOCOL, REST.toUpperCase())
-                    .build();
-            DeviceDescription deviceDescription = new DefaultDeviceDescription(
-                    deviceId.uri(),
-                    Device.Type.SWITCH,
-                    UNKNOWN, UNKNOWN,
-                    UNKNOWN, UNKNOWN,
-                    cid,
-                    annotations);
-            restSBDev.setActive(true);
-            providerService.deviceConnected(deviceId, deviceDescription);
+            if (driver != null && driver.hasBehaviour(DevicesDiscovery.class)) {
+                restSBDev.setActive(true);
+                DevicesDiscovery devicesDiscovery = devicesDiscovery(restSBDev, driver);
+                DeviceDescription deviceDescription = devicesDiscovery.deviceDetails(deviceId);
+                checkNotNull(deviceDescription, "DeviceDescription cannot be null");
+                providerService.deviceConnected(deviceId, deviceDescription);
+
+                if (driver.hasBehaviour(DeviceDescriptionDiscovery.class)) {
+                    DriverHandler h = driverService.createHandler(deviceId);
+                    DeviceDescriptionDiscovery deviceDiscovery = h.behaviour(DeviceDescriptionDiscovery.class);
+                    providerService.updatePorts(deviceId, deviceDiscovery.discoverPortDetails());
+                }
+            } else {
+                ChassisId cid = new ChassisId();
+                String ipAddress = restSBDev.ip().toString();
+                SparseAnnotations annotations = DefaultAnnotations.builder()
+                        .set(IPADDRESS, ipAddress)
+                        .set(AnnotationKeys.PROTOCOL, REST.toUpperCase())
+                        .build();
+                DeviceDescription deviceDescription = new DefaultDeviceDescription(
+                        deviceId.uri(),
+                        Device.Type.SWITCH,
+                        UNKNOWN, UNKNOWN,
+                        UNKNOWN, UNKNOWN,
+                        cid,
+                        annotations);
+                restSBDev.setActive(true);
+                providerService.deviceConnected(deviceId, deviceDescription);
+            }
+
             checkAndUpdateDevice(deviceId);
         }
     }
@@ -276,16 +318,14 @@ public class RestDeviceProvider extends AbstractProvider
 
     private DevicesDiscovery devicesDiscovery(RestSBDevice restSBDevice, Driver driver) {
         DriverData driverData = new DefaultDriverData(driver, restSBDevice.deviceId());
-        DevicesDiscovery devicesDiscovery = driver.createBehaviour(driverData,
-                                                                   DevicesDiscovery.class);
+        DevicesDiscovery devicesDiscovery = driver.createBehaviour(driverData, DevicesDiscovery.class);
         devicesDiscovery.setHandler(new DefaultDriverHandler(driverData));
         return devicesDiscovery;
     }
 
     private void checkAndUpdateDevice(DeviceId deviceId) {
         if (deviceService.getDevice(deviceId) == null) {
-            log.warn("Device {} has not been added to store, " +
-                             "maybe due to a problem in connectivity", deviceId);
+            log.warn("Device {} has not been added to store, maybe due to a problem in connectivity", deviceId);
         } else {
             boolean isReachable = isReachable(deviceId);
             if (isReachable && deviceService.isAvailable(deviceId)) {
@@ -340,12 +380,12 @@ public class RestDeviceProvider extends AbstractProvider
     //Method to connect devices provided via net-cfg under devices/ tree
     private void createAndConnectDevices() {
         Set<DeviceId> deviceSubjects =
-                cfgService.getSubjects(DeviceId.class, RestDeviceConfig.class);
+                netCfgService.getSubjects(DeviceId.class, RestDeviceConfig.class);
         connectDevices(deviceSubjects.stream()
                 .filter(deviceId -> deviceService.getDevice(deviceId) == null)
                 .map(deviceId -> {
                     RestDeviceConfig config =
-                            cfgService.getConfig(deviceId, RestDeviceConfig.class);
+                            netCfgService.getConfig(deviceId, RestDeviceConfig.class);
                     return toInactiveRestSBDevice(config);
                 }).collect(Collectors.toSet()));
     }
@@ -362,6 +402,7 @@ public class RestDeviceProvider extends AbstractProvider
                 config.manufacturer(),
                 config.hwVersion(),
                 config.swVersion(),
+                config.isProxy(),
                 config.authenticationScheme(),
                 config.token()
         );
@@ -395,8 +436,7 @@ public class RestDeviceProvider extends AbstractProvider
 
     private ScheduledFuture schedulePolling() {
         return portStatisticsExecutor.scheduleAtFixedRate(this::executePortStatisticsUpdate,
-                                                          DEFAULT_POLL_FREQUENCY_SECONDS / 2,
-                                                          DEFAULT_POLL_FREQUENCY_SECONDS,
+                                                          pollFrequency / 2, pollFrequency,
                                                           TimeUnit.SECONDS);
     }
 
@@ -421,8 +461,7 @@ public class RestDeviceProvider extends AbstractProvider
 
     private void discoverPorts(DeviceId deviceId) {
         Device device = deviceService.getDevice(deviceId);
-        DeviceDescriptionDiscovery deviceDescriptionDiscovery =
-                device.as(DeviceDescriptionDiscovery.class);
+        DeviceDescriptionDiscovery deviceDescriptionDiscovery = device.as(DeviceDescriptionDiscovery.class);
         providerService.updatePorts(deviceId, deviceDescriptionDiscovery.discoverPortDetails());
     }
 
@@ -442,14 +481,14 @@ public class RestDeviceProvider extends AbstractProvider
             try {
                 return future.get(REST_TIMEOUT_SEC, TimeUnit.SECONDS);
             } catch (TimeoutException ex) {
-                log.warn("Connection to device {} timed out", dev.deviceId());
+                log.warn("Connection to device {} timed out: {}", dev.deviceId(), ex.getMessage());
                 return false;
             } catch (InterruptedException ex) {
-                log.warn("Connection to device {} interrupted", dev.deviceId());
+                log.warn("Connection to device {} interrupted: {}", dev.deviceId(), ex.getMessage());
                 Thread.currentThread().interrupt();
                 return false;
             } catch (ExecutionException ex) {
-                log.warn("Connection to device {} had a execution exception", dev.deviceId());
+                log.warn("Connection to device {} had an execution exception.", dev.deviceId(), ex);
                 return false;
             }
 
@@ -462,6 +501,11 @@ public class RestDeviceProvider extends AbstractProvider
     private class InternalNetworkConfigListener implements NetworkConfigListener {
         @Override
         public void event(NetworkConfigEvent event) {
+            if (!isRelevant(event)) {
+                log.warn("Irrelevant network configuration event: {}", event);
+                return;
+            }
+
             ExecutorService bg = SharedExecutors.getSingleThreadExecutor();
             if (event.type() == CONFIG_REMOVED) {
                 DeviceId did = (DeviceId) event.subject();

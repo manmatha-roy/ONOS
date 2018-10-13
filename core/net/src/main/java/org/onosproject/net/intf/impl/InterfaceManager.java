@@ -49,6 +49,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.collectingAndThen;
@@ -166,6 +167,92 @@ public class InterfaceManager extends ListenerRegistry<InterfaceEvent, Interface
                 .flatMap(Collection::stream)
                 .filter(intf -> intf.vlan().equals(vlan))
                 .collect(collectingAndThen(toSet(), ImmutableSet::copyOf));
+    }
+
+    /**
+     * Returns untagged VLAN configured on given connect point.
+     * <p>
+     * Only returns the first match if there are multiple untagged VLAN configured
+     * on the connect point.
+     *
+     * @param connectPoint connect point
+     * @return untagged VLAN or null if not configured
+     */
+    @Override
+    public VlanId getUntaggedVlanId(ConnectPoint connectPoint) {
+        return getInterfacesByPort(connectPoint).stream()
+                .filter(intf -> !intf.vlanUntagged().equals(VlanId.NONE))
+                .map(Interface::vlanUntagged)
+                .findFirst().orElse(null);
+    }
+
+    /**
+     * Returns tagged VLAN configured on given connect point.
+     * <p>
+     * Returns all matches if there are multiple tagged VLAN configured
+     * on the connect point.
+     *
+     * @param connectPoint connect point
+     * @return tagged VLAN or empty set if not configured
+     */
+    @Override
+    public Set<VlanId> getTaggedVlanId(ConnectPoint connectPoint) {
+        Set<Interface> interfaces = getInterfacesByPort(connectPoint);
+        return interfaces.stream()
+                .map(Interface::vlanTagged)
+                .flatMap(Set::stream)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Returns native VLAN configured on given connect point.
+     * <p>
+     * Only returns the first match if there are multiple native VLAN configured
+     * on the connect point.
+     *
+     * @param connectPoint connect point
+     * @return native VLAN or null if not configured
+     */
+    @Override
+    public VlanId getNativeVlanId(ConnectPoint connectPoint) {
+        Set<Interface> interfaces = getInterfacesByPort(connectPoint);
+        return interfaces.stream()
+                .filter(intf -> !intf.vlanNative().equals(VlanId.NONE))
+                .map(Interface::vlanNative)
+                .findFirst()
+                .orElse(null);
+    }
+
+    @Override
+    public boolean isConfigured(ConnectPoint connectPoint) {
+        Set<Interface> intfs = interfaces.get(connectPoint);
+        if (intfs == null) {
+            return false;
+        }
+        for (Interface intf : intfs) {
+            if (!intf.ipAddressesList().isEmpty() || intf.vlan() != VlanId.NONE
+                    || intf.vlanNative() != VlanId.NONE
+                    || intf.vlanUntagged() != VlanId.NONE
+                    || !intf.vlanTagged().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean inUse(VlanId vlanId) {
+        for (Set<Interface> intfs : interfaces.values()) {
+            for (Interface intf : intfs) {
+                if (intf.vlan().equals(vlanId)
+                        || intf.vlanNative().equals(vlanId)
+                        || intf.vlanUntagged().equals(vlanId)
+                        || intf.vlanTagged().contains(vlanId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void updateInterfaces(InterfaceConfig intfConfig) {

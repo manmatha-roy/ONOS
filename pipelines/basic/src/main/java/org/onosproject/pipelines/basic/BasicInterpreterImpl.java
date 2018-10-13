@@ -32,10 +32,10 @@ import org.onosproject.net.flow.instructions.Instruction;
 import org.onosproject.net.packet.DefaultInboundPacket;
 import org.onosproject.net.packet.InboundPacket;
 import org.onosproject.net.packet.OutboundPacket;
-import org.onosproject.net.pi.model.PiCounterId;
 import org.onosproject.net.pi.model.PiMatchFieldId;
 import org.onosproject.net.pi.model.PiPipelineInterpreter;
 import org.onosproject.net.pi.model.PiTableId;
+import org.onosproject.net.pi.model.PiActionId;
 import org.onosproject.net.pi.runtime.PiAction;
 import org.onosproject.net.pi.runtime.PiActionParam;
 import org.onosproject.net.pi.runtime.PiControlMetadata;
@@ -49,7 +49,6 @@ import java.util.Optional;
 import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
 import static org.onlab.util.ImmutableByteSequence.copyFrom;
-import static org.onlab.util.ImmutableByteSequence.fit;
 import static org.onosproject.net.PortNumber.CONTROLLER;
 import static org.onosproject.net.PortNumber.FLOOD;
 import static org.onosproject.net.flow.instructions.Instruction.Type.OUTPUT;
@@ -59,9 +58,8 @@ import static org.onosproject.pipelines.basic.BasicConstants.ACT_DROP_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.ACT_NOACTION_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.ACT_PRM_PORT_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.ACT_SEND_TO_CPU_ID;
-import static org.onosproject.pipelines.basic.BasicConstants.ACT_SET_EGRESS_PORT_ID;
-import static org.onosproject.pipelines.basic.BasicConstants.CNT_TABLE0_ID;
-import static org.onosproject.pipelines.basic.BasicConstants.CNT_WCMP_TABLE_ID;
+import static org.onosproject.pipelines.basic.BasicConstants.ACT_SET_EGRESS_PORT_TABLE0_ID;
+import static org.onosproject.pipelines.basic.BasicConstants.ACT_SET_EGRESS_PORT_WCMP_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.HDR_ETH_DST_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.HDR_ETH_SRC_ID;
 import static org.onosproject.pipelines.basic.BasicConstants.HDR_ETH_TYPE_ID;
@@ -84,11 +82,7 @@ public class BasicInterpreterImpl extends AbstractHandlerBehaviour
             new ImmutableBiMap.Builder<Integer, PiTableId>()
                     .put(0, TBL_TABLE0_ID)
                     .build();
-    private static final ImmutableBiMap<PiTableId, PiCounterId> TABLE_COUNTER_MAP =
-            new ImmutableBiMap.Builder<PiTableId, PiCounterId>()
-                    .put(TBL_TABLE0_ID, CNT_TABLE0_ID)
-                    .put(TBL_WCMP_TABLE_ID, CNT_WCMP_TABLE_ID)
-                    .build();
+
     private static final ImmutableBiMap<Criterion.Type, PiMatchFieldId> CRITERION_MAP =
             new ImmutableBiMap.Builder<Criterion.Type, PiMatchFieldId>()
                     .put(Criterion.Type.IN_PORT, HDR_IN_PORT_ID)
@@ -113,7 +107,14 @@ public class BasicInterpreterImpl extends AbstractHandlerBehaviour
         Instruction instruction = treatment.allInstructions().get(0);
         switch (instruction.type()) {
             case OUTPUT:
-                return outputPiAction((OutputInstruction) instruction);
+                if (piTableId == TBL_TABLE0_ID) {
+                    return outputPiAction((OutputInstruction) instruction, ACT_SET_EGRESS_PORT_TABLE0_ID);
+                } else if (piTableId == TBL_WCMP_TABLE_ID) {
+                    return outputPiAction((OutputInstruction) instruction, ACT_SET_EGRESS_PORT_WCMP_ID);
+                } else {
+                    throw new PiInterpreterException(
+                            "Output instruction not supported in table " + piTableId);
+                }
             case NOACTION:
                 return PiAction.builder().withId(ACT_NOACTION_ID).build();
             default:
@@ -122,15 +123,15 @@ public class BasicInterpreterImpl extends AbstractHandlerBehaviour
         }
     }
 
-    private PiAction outputPiAction(OutputInstruction outInstruction)
+    private PiAction outputPiAction(OutputInstruction outInstruction, PiActionId piActionId)
             throws PiInterpreterException {
         PortNumber port = outInstruction.port();
         if (!port.isLogical()) {
             try {
                 return PiAction.builder()
-                        .withId(ACT_SET_EGRESS_PORT_ID)
+                        .withId(piActionId)
                         .withParameter(new PiActionParam(ACT_PRM_PORT_ID,
-                                                         fit(copyFrom(port.toLong()), PORT_BITWIDTH)))
+                                                         copyFrom(port.toLong()).fit(PORT_BITWIDTH)))
                         .build();
             } catch (ImmutableByteSequence.ByteSequenceTrimException e) {
                 throw new PiInterpreterException(e.getMessage());
@@ -141,11 +142,6 @@ public class BasicInterpreterImpl extends AbstractHandlerBehaviour
             throw new PiInterpreterException(format(
                     "Egress on logical port '%s' not supported", port));
         }
-    }
-
-    @Override
-    public Optional<PiCounterId> mapTableCounter(PiTableId piTableId) {
-        return Optional.ofNullable(TABLE_COUNTER_MAP.get(piTableId));
     }
 
     @Override
@@ -231,7 +227,7 @@ public class BasicInterpreterImpl extends AbstractHandlerBehaviour
         try {
             return PiControlMetadata.builder()
                     .withId(PKT_META_EGRESS_PORT_ID)
-                    .withValue(fit(copyFrom(portNumber), PORT_BITWIDTH))
+                    .withValue(copyFrom(portNumber).fit(PORT_BITWIDTH))
                     .build();
         } catch (ImmutableByteSequence.ByteSequenceTrimException e) {
             throw new PiInterpreterException(format(

@@ -21,7 +21,7 @@
     <parent>
         <artifactId>onos-restsb</artifactId>
         <groupId>org.onosproject</groupId>
-        <version>1.13.0-SNAPSHOT</version>
+        <version>1.14.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -38,6 +38,10 @@
             <artifactId>onos-restsb-api</artifactId>
             <version>${project.version}</version>
             <type>bundle</type>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jersey.media</groupId>
+            <artifactId>jersey-media-sse</artifactId>
         </dependency>
     </dependencies>
 

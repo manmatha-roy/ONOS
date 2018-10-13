@@ -44,15 +44,15 @@ import java.util.stream.Collectors;
 import static org.onosproject.net.pi.model.PiCounterType.INDIRECT;
 
 /**
- * Implementation of the PortStatisticsDiscovery behaviour for the main.p4 program. This behaviour works by using a
+ * Implementation of the PortStatisticsDiscovery behaviour for the mytunnel.p4 program. This behaviour works by using a
  * P4Runtime client to read the values of the ingress/egress port counters defined in the P4 program.
  */
 public final class PortStatisticsDiscoveryImpl extends AbstractHandlerBehaviour implements PortStatisticsDiscovery {
 
     private static final Logger log = LoggerFactory.getLogger(PortStatisticsDiscoveryImpl.class);
 
-    private static final PiCounterId INGRESS_COUNTER_ID = PiCounterId.of("igr_port_counter");
-    private static final PiCounterId EGRESS_COUNTER_ID = PiCounterId.of("egr_port_counter");
+    private static final PiCounterId INGRESS_COUNTER_ID = PiCounterId.of("c_ingress.rx_port_counter");
+    private static final PiCounterId EGRESS_COUNTER_ID = PiCounterId.of("c_ingress.tx_port_counter");
 
     @Override
     public Collection<PortStatistics> discoverPortStatistics() {
@@ -62,11 +62,11 @@ public final class PortStatisticsDiscoveryImpl extends AbstractHandlerBehaviour 
 
         // Get a client for this device.
         P4RuntimeController controller = handler().get(P4RuntimeController.class);
-        if (!controller.hasClient(deviceId)) {
+        P4RuntimeClient client = controller.getClient(deviceId);
+        if (client == null) {
             log.warn("Unable to find client for {}, aborting operation", deviceId);
             return Collections.emptyList();
         }
-        P4RuntimeClient client = controller.getClient(deviceId);
 
         // Get the pipeconf of this device.
         PiPipeconfService piPipeconfService = handler().get(PiPipeconfService.class);
